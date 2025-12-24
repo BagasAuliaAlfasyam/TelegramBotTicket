@@ -63,3 +63,28 @@ class GoogleSheetsClient:
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed to update row %s in Google Sheets: %s", row_index, exc)
             raise
+
+    def get_row(self, row_index: int) -> list[str]:
+        """Fetch a single row by index (1-based)."""
+        try:
+            values = self._worksheet.row_values(row_index)
+            return values
+        except (GSpreadException, APIError):
+            _LOGGER.exception("Failed to fetch row %s", row_index)
+            return []
+
+    def find_row_index_by_tech_message_id(self, tech_message_id: str) -> int | None:
+        """Locate the row index for a given technician message id.
+
+        Uses worksheet.find which searches the whole sheet; assumes tech_message_id
+        is unique per sheet (one ticket per technician message).
+        """
+        try:
+            cell = self._worksheet.find(str(tech_message_id))
+        except (GSpreadException, APIError):
+            _LOGGER.exception("Failed to search for tech_message_id=%s", tech_message_id)
+            return None
+
+        if not cell:
+            return None
+        return cell.row

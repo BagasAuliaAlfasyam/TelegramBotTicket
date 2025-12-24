@@ -27,7 +27,11 @@ def parse_ops_message(text: str, allowed_apps: Collection[str]) -> Optional[Dict
 
     normalized_apps = {app.upper() for app in allowed_apps}
     stripped_text = text.strip()
-    match = _OPS_PATTERN.match(stripped_text)
+
+    # Normalize any newline/extra whitespace into single spaces so multiline replies still match.
+    normalized_text = " ".join(stripped_text.split())
+
+    match = _OPS_PATTERN.match(normalized_text)
     if not match:
         return None
 

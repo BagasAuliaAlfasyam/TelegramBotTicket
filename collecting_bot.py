@@ -1,6 +1,7 @@
 """Telegram bot logic for collecting Ops replies and logging them to Google Sheets."""
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -63,6 +64,68 @@ class MediaInfo:
     file_name: str | None
 
 
+class PersistentState:
+    """Lightweight JSON-backed store for ack caches across restarts."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._ack_cache: dict[tuple[str, str], datetime] = {}
+        self._ack_row_index: dict[tuple[str, str], int] = {}
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            raw = json.loads(self._path.read_text())
+        except Exception:
+            _LOGGER.warning("Failed to load state file, starting fresh", exc_info=True)
+            return
+        for key_str, ts in raw.get("ack_cache", {}).items():
+            parts = key_str.split("::", 1)
+            if len(parts) != 2:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts)
+            except Exception:
+                continue
+            self._ack_cache[(parts[0], parts[1])] = dt
+        for key_str, idx in raw.get("ack_row_index", {}).items():
+            parts = key_str.split("::", 1)
+            if len(parts) != 2:
+                continue
+            if isinstance(idx, int):
+                self._ack_row_index[(parts[0], parts[1])] = idx
+
+    def _dump(self) -> None:
+        try:
+            data = {
+                "ack_cache": {
+                    f"{k[0]}::{k[1]}": v.isoformat() for k, v in self._ack_cache.items()
+                },
+                "ack_row_index": {
+                    f"{k[0]}::{k[1]}": v for k, v in self._ack_row_index.items()
+                },
+            }
+            self._path.write_text(json.dumps(data))
+        except Exception:
+            _LOGGER.warning("Failed to persist state", exc_info=True)
+
+    def get_ack_dt(self, key: tuple[str, str]) -> datetime | None:
+        return self._ack_cache.get(key)
+
+    def set_ack_dt(self, key: tuple[str, str], value: datetime) -> None:
+        self._ack_cache[key] = value
+        self._dump()
+
+    def get_row_idx(self, key: tuple[str, str]) -> int | None:
+        return self._ack_row_index.get(key)
+
+    def set_row_idx(self, key: tuple[str, str], value: int) -> None:
+        self._ack_row_index[key] = value
+        self._dump()
+
+
 class OpsCollector:
     """Stateful handler that encapsulates collecting logic."""
 
@@ -76,8 +139,7 @@ class OpsCollector:
         self._sheets = sheets_client
         self._s3_uploader = s3_uploader
         self._reporting_bot = Bot(token=config.telegram_bot_token_reporting)
-        self._ack_cache: dict[tuple[str, str], datetime] = {}
-        self._ack_row_index: dict[tuple[str, str], int] = {}
+        self._state = PersistentState(Path("state_cache.json"))
         try:
             self._tz = ZoneInfo(config.timezone)
         except Exception:
@@ -93,7 +155,7 @@ class OpsCollector:
     async def handle_ops_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Process Ops replies, validate format, and log them to Google Sheets."""
 
-        message = update.message
+        message = update.effective_message
         if not message or not message.text or not message.reply_to_message:
             return
 
@@ -109,6 +171,8 @@ class OpsCollector:
         ):
             return
 
+        now_dt = _to_utc_datetime(message.date) or datetime.now(timezone.utc)
+
         is_ack = "oncek" in message.text.lower()
         parsed = parse_ops_message(message.text, _ALLOWED_APPS) if not is_ack else None
         if not parsed and not is_ack:
@@ -119,12 +183,14 @@ class OpsCollector:
         tech_message_date = ""
         tech_message_time = ""
         tech_message_dt = _to_utc_datetime(tech_message.date)
+        if getattr(tech_message, "forward_date", None) or getattr(tech_message, "forward_origin", None) or getattr(tech_message, "is_automatic_forward", False):
+            # Use arrival time (reply time) instead of original forwarded timestamp to avoid inflated SLA.
+            tech_message_dt = now_dt
         tech_local_dt = _to_local_datetime(tech_message_dt, self._tz)
         if tech_local_dt:
             tech_message_date = tech_local_dt.date().isoformat()
             tech_message_time = tech_local_dt.strftime("%H:%M:%S")
 
-        now_dt = _to_utc_datetime(message.date) or datetime.now(timezone.utc)
         now_local_dt = _to_local_datetime(now_dt, self._tz)
         ticket_date = now_local_dt.date().isoformat() if now_local_dt else ""
         response_at = now_local_dt.strftime("%H:%M:%S") if now_local_dt else ""
@@ -135,6 +201,7 @@ class OpsCollector:
         )
 
         media_url = ""
+        media_upload_failed = False
         if media_info.file_id and media_info.media_type:
             try:
                 media_url = await self._upload_media_to_s3(
@@ -145,33 +212,61 @@ class OpsCollector:
                 )
             except Exception:
                 _LOGGER.exception("Failed to upload media to S3")
-                notification_chat_id = self._config.target_group_reporting or message.chat.id
-                can_reply_in_place = notification_chat_id == message.chat.id
-                await self._safe_notify(
-                    chat_id=notification_chat_id,
-                    text="❌ Gagal mengunggah lampiran, tiket tidak direkap.",
-                    reply_to_id=message.message_id if can_reply_in_place else None,
-                )
-                return
+                media_upload_failed = True
 
         chat_id_str = str(message.chat.id)
         group_label = message.chat.title or message.chat.username or chat_id_str
         tech_message_id_str = str(tech_message.message_id)
         notify_text = ''
         ack_key = (chat_id_str, tech_message_id_str)
-        ack_idx = self._ack_row_index.get(ack_key)
+        ack_idx = self._state.get_row_idx(ack_key)
+        if not ack_idx:
+            # Fallback: find row in Sheets by tech_message_id to survive restarts.
+            ack_idx = self._sheets.find_row_index_by_tech_message_id(tech_message_id_str)
+            if ack_idx:
+                self._state.set_row_idx(ack_key, ack_idx)
         duplicate_ack = False
         row: list[str | int | float] | None = None
 
         if is_ack:
-            existing_ack_dt = self._ack_cache.get(ack_key)
-            if existing_ack_dt or ack_idx:
+            existing_ack_dt = self._state.get_ack_dt(ack_key)
+            existing_row = self._sheets.get_row(ack_idx) if ack_idx else []
+            has_solution = bool(existing_row and len(existing_row) > 10 and any(existing_row[9:12]))
+
+            if has_solution:
                 duplicate_ack = True
-                notify_text = f"Tiket sudah dicek (oncek) untuk grup: {group_label}, belum ada solusi."
+                notify_text = f"Tiket sudah punya solusi, oncek diabaikan untuk grup: {group_label}."
+            elif existing_ack_dt or ack_idx:
+                # Update existing oncek row (refresh data)
+                ack_dt = existing_ack_dt or now_dt
+                self._state.set_ack_dt(ack_key, ack_dt)
+                sla_response_min, sla_status, sla_remaining_min = _compute_sla(tech_message_dt, ack_dt, self._tz)
+                row = [
+                    group_label,
+                    ticket_date,
+                    response_at,
+                    tech_message_id_str,
+                    tech_message_date,
+                    tech_message_time,
+                    tech_raw_text,
+                    media_info.media_type,
+                    media_url,
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    '',
+                    'true',
+                    sla_response_min,
+                    sla_status,
+                    sla_remaining_min,
+                ]
+                notify_text = f"Respon awal (oncek) diperbarui untuk grup: {group_label}."
             else:
                 ack_dt = now_dt
-                self._ack_cache[ack_key] = ack_dt
-                sla_response_min, sla_status, sla_remaining_min = _compute_sla(tech_message_dt, ack_dt)
+                self._state.set_ack_dt(ack_key, ack_dt)
+                sla_response_min, sla_status, sla_remaining_min = _compute_sla(tech_message_dt, ack_dt, self._tz)
                 row = [
                     group_label,        # Informasi Tiket
                     ticket_date,
@@ -201,10 +296,10 @@ class OpsCollector:
                 _LOGGER.info("Ignoring ops reply from unknown solver '%s'", parsed["initials"])
                 return
 
-            ack_dt = self._ack_cache.get(ack_key, None)
-            sla_response_min, sla_status, sla_remaining_min = _compute_sla(tech_message_dt, ack_dt or now_dt)
+            ack_dt = self._state.get_ack_dt(ack_key)
+            sla_response_min, sla_status, sla_remaining_min = _compute_sla(tech_message_dt, ack_dt or now_dt, self._tz)
             solve_timestamp = now_local_dt.strftime("%H:%M:%S") if now_local_dt else ""
-            is_oncek_flag = 'true' if ack_dt or self._ack_row_index.get(ack_key) else 'false'
+            is_oncek_flag = 'true' if ack_dt or self._state.get_row_idx(ack_key) else 'false'
             row = [
                 group_label,
                 ticket_date,
@@ -229,20 +324,25 @@ class OpsCollector:
             notify_text = f"Laporan dan solusi sudah dicatat oleh {solver_name} untuk grup: {group_label}."
         notification_chat_id = self._config.target_group_reporting or message.chat.id
         can_reply_in_place = notification_chat_id == message.chat.id
+        link_text = None
+        if not can_reply_in_place:
+            link_text = _build_message_link(message.chat.id, message.message_id)
 
         try:
-            ack_idx = self._ack_row_index.get((chat_id_str, tech_message_id_str))
+            ack_idx = self._state.get_row_idx((chat_id_str, tech_message_id_str))
             if not duplicate_ack and row is not None:
                 if is_ack:
                     if ack_idx:
                         self._sheets.update_log_row(ack_idx, row)
+                        self._state.set_row_idx((chat_id_str, tech_message_id_str), ack_idx)
                     else:
                         maybe_idx = self._sheets.append_log_row(row, return_row_index=True)
                         if maybe_idx:
-                            self._ack_row_index[(chat_id_str, tech_message_id_str)] = maybe_idx
+                            self._state.set_row_idx((chat_id_str, tech_message_id_str), maybe_idx)
                 else:
                     if ack_idx:
                         self._sheets.update_log_row(ack_idx, row)
+                        self._state.set_row_idx((chat_id_str, tech_message_id_str), ack_idx)
                     else:
                         self._sheets.append_log_row(row)
         except Exception:  # pragma: no cover - log and notify failure
@@ -253,6 +353,12 @@ class OpsCollector:
                 reply_to_id=message.message_id if can_reply_in_place else None,
             )
             return
+
+        if media_upload_failed:
+            notify_text = f"{notify_text}\nLampiran gagal diunggah, tiket tetap direkap tanpa lampiran."
+
+        if link_text:
+            notify_text = f"{notify_text}\nLihat pesan: {link_text}"
 
         await self._safe_notify(
             chat_id=notification_chat_id,
@@ -298,6 +404,18 @@ class OpsCollector:
             _LOGGER.warning("Reporting bot failed to send notification", exc_info=True)
 
 
+def _build_message_link(chat_id: int, message_id: int) -> str | None:
+    """Build a t.me deep link for supergroups when possible."""
+    if chat_id >= 0:
+        return None
+    abs_id = str(abs(chat_id))
+    if abs_id.startswith("100"):
+        short_id = abs_id[3:]
+    else:
+        short_id = abs_id
+    return f"https://t.me/c/{short_id}/{message_id}"
+
+
 def _extract_media_info(message: Message) -> MediaInfo:
     """Derive media details from a technician message."""
     if message.photo:
@@ -337,15 +455,55 @@ def _to_local_datetime(value: datetime | None, tz: ZoneInfo) -> datetime | None:
     return value.astimezone(tz)
 
 
-def _compute_sla(tech_dt: datetime | None, response_dt: datetime | None) -> tuple[str | float, str, str | float]:
-    """Compute SLA metrics between technician message and response time."""
+def _compute_sla(tech_dt: datetime | None, response_dt: datetime | None, tz: ZoneInfo) -> tuple[str | float, str, str | float]:
+    """Compute SLA metrics, pausing during configured break windows (12-13, 19-20 local)."""
     if not tech_dt or not response_dt:
         return "", "", ""
-    delta_seconds = max((response_dt - tech_dt).total_seconds(), 0)
-    minutes = round(delta_seconds / 60, 2)
+
+    if tech_dt > response_dt:
+        tech_dt, response_dt = response_dt, tech_dt
+
+    paused_minutes = _paused_minutes_between(tech_dt, response_dt, tz)
+    active_seconds = max((response_dt - tech_dt).total_seconds() - (paused_minutes * 60), 0)
+    minutes = round(active_seconds / 60, 2)
     remaining = round(max(15 - minutes, 0), 2)
     status = "OK" if minutes <= 15 else "TERLAMBAT"
     return minutes, status, remaining
+
+
+def _paused_minutes_between(start_utc: datetime, end_utc: datetime, tz: ZoneInfo) -> float:
+    """Calculate total paused minutes (breaks) between two UTC timestamps in local time."""
+    start_local = start_utc.astimezone(tz)
+    end_local = end_utc.astimezone(tz)
+    if end_local <= start_local:
+        return 0.0
+
+    # Daily break windows (local time)
+    breaks = [(12, 13), (19, 20)]
+
+    total_seconds = 0.0
+    current_date = start_local.date()
+    end_date = end_local.date()
+
+    while current_date <= end_date:
+        for hour_start, hour_end in breaks:
+            window_start = datetime.combine(current_date, datetime.min.time(), tz).replace(hour=hour_start, minute=0, second=0, microsecond=0)
+            window_end = datetime.combine(current_date, datetime.min.time(), tz).replace(hour=hour_end, minute=0, second=0, microsecond=0)
+
+            overlap_seconds = _overlap_seconds(start_local, end_local, window_start, window_end)
+            total_seconds += overlap_seconds
+
+        current_date = current_date.fromordinal(current_date.toordinal() + 1)
+
+    return round(total_seconds / 60, 2)
+
+
+def _overlap_seconds(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> float:
+    """Return overlapping seconds between intervals [a_start, a_end] and [b_start, b_end]."""
+    latest_start = max(a_start, b_start)
+    earliest_end = min(a_end, b_end)
+    delta = (earliest_end - latest_start).total_seconds()
+    return max(delta, 0.0)
 
 
 def build_collecting_application(
@@ -360,5 +518,11 @@ def build_collecting_application(
     application.add_handler(CommandHandler(["health", "ping"], collector.health))
     application.add_handler(
         MessageHandler(filters.TEXT & (~filters.COMMAND), collector.handle_ops_reply)
+    )
+    application.add_handler(
+        MessageHandler(
+            filters.UpdateType.EDITED_MESSAGE & filters.TEXT & (~filters.COMMAND),
+            collector.handle_ops_reply,
+        )
     )
     return application
