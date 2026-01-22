@@ -217,7 +217,7 @@ def main():
     _LOGGER.info("Starting sync...")
     
     try:
-        config = Config()
+        config = Config.from_env()
         stats = sync_logs_to_ml_tracking(config)
         
         print("\n" + "="*60)
