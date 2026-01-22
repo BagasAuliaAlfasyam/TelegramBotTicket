@@ -94,11 +94,23 @@ def sync_logs_to_ml_tracking(config: Config) -> dict:
     if not spreadsheet_name:
         spreadsheet_name = 'Log_Tiket_MyTech_ML_Test'
     
-    spreadsheet = client.open(spreadsheet_name)
+    try:
+        spreadsheet = client.open(spreadsheet_name)
+        _LOGGER.info(f"Opened spreadsheet: {spreadsheet_name}")
+    except gspread.SpreadsheetNotFound:
+        raise ValueError(f"Spreadsheet '{spreadsheet_name}' not found! Check config or sharing permissions.")
+    
+    # List available worksheets
+    available_ws = [ws.title for ws in spreadsheet.worksheets()]
+    _LOGGER.info(f"Available worksheets: {available_ws}")
     
     # 1. Load Logs sheet
     _LOGGER.info("Loading Logs sheet...")
-    logs_ws = spreadsheet.worksheet("Logs")
+    try:
+        logs_ws = spreadsheet.worksheet("Logs")
+    except gspread.WorksheetNotFound:
+        raise ValueError(f"Worksheet 'Logs' not found! Available: {available_ws}")
+    
     logs_data = logs_ws.get_all_values()
     
     if len(logs_data) <= 1:
@@ -179,7 +191,7 @@ def sync_logs_to_ml_tracking(config: Config) -> dict:
     
     # Upload in batches (gspread limit)
     _LOGGER.info(f"  Uploading {len(values)-1} rows...")
-    ml_ws.update(range_name='A1', values=values)
+    ml_ws.update(values=values, range_name='A1')
     
     _LOGGER.info("✅ Sync complete!")
     
