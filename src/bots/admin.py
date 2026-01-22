@@ -508,6 +508,8 @@ class AdminCommandHandler:
             else:
                 cmd.extend(["--check-threshold", "100"])
             
+            _LOGGER.info("Starting retrain subprocess: %s", " ".join(cmd))
+            
             # Run in background thread to not block
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
@@ -516,9 +518,19 @@ class AdminCommandHandler:
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=300  # 5 minute timeout
+                    timeout=600  # 10 minute timeout for Optuna
                 )
             )
+            
+            # Log stdout and stderr to journalctl
+            if result.stdout:
+                for line in result.stdout.strip().split('\n'):
+                    _LOGGER.info("[retrain] %s", line)
+            if result.stderr:
+                for line in result.stderr.strip().split('\n'):
+                    _LOGGER.warning("[retrain] %s", line)
+            
+            _LOGGER.info("Retrain subprocess finished with code: %d", result.returncode)
             
             # Check result
             if result.returncode == 0:
