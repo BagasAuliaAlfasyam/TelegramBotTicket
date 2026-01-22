@@ -546,9 +546,16 @@ class ModelRetrainer:
         _LOGGER.info(f"  solving NaN/empty: {df['solving'].isna().sum()}")
         _LOGGER.info(f"  Symtomps NaN/empty: {df['Symtomps'].isna().sum()}")
         
-        # Fill NaN for text columns (they can be empty, we'll combine them)
+        # Fill NaN for tech raw text (can be empty, solving might have data)
         df['tech raw text'] = df['tech raw text'].fillna('')
-        df['solving'] = df['solving'].fillna('')
+        
+        # Drop rows with empty solving (required for quality training)
+        before = len(df)
+        df = df.dropna(subset=['solving'])
+        df = df[df['solving'].str.strip() != '']
+        after = len(df)
+        if before - after > 0:
+            _LOGGER.info(f"  Dropped {before - after} rows with empty solving")
         
         # Drop rows with empty Symtomps (target column MUST have value)
         before = len(df)
