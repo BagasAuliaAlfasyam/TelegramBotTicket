@@ -734,6 +734,7 @@ def build_reporting_application(
         Configured Application instance
     """
     from telegram.ext import Application
+    from telegram import BotCommand
     
     # Admin command handler
     admin_handler = AdminCommandHandler(
@@ -757,6 +758,24 @@ def build_reporting_application(
     application.add_handler(CommandHandler("reloadmodel", admin_handler.reload_model))
     application.add_handler(CommandHandler("helpml", admin_handler.help_admin))
     application.add_handler(CommandHandler("help", admin_handler.help_admin))
+    
+    # Set bot commands menu (appears when user types /)
+    async def post_init(app: Application) -> None:
+        commands = [
+            BotCommand("help", "Tampilkan bantuan"),
+            BotCommand("stats", "Statistik ML hari ini"),
+            BotCommand("report", "Generate laporan"),
+            BotCommand("modelstatus", "Status model ML"),
+            BotCommand("pendingreview", "Lihat pending review"),
+            BotCommand("retrainstatus", "Cek status retrain"),
+            BotCommand("retrain", "Retrain model ML"),
+            BotCommand("reloadmodel", "Reload model terbaru"),
+            BotCommand("updatestats", "Update statistik manual"),
+        ]
+        await app.bot.set_my_commands(commands)
+        _LOGGER.info("Bot commands menu set: %d commands", len(commands))
+    
+    application.post_init = post_init
     
     _LOGGER.info("Reporting bot application built with %d handlers", 
                 len(application.handlers.get(0, [])))
