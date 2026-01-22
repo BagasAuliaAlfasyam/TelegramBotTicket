@@ -525,12 +525,34 @@ class AdminCommandHandler:
             )
             
             output_lines = []
-            last_update = asyncio.get_event_loop().time()
-            update_interval = 3  # Update Telegram every 3 seconds
+            start_time = asyncio.get_event_loop().time()
+            last_update = start_time
+            update_interval = 5  # Update Telegram every 5 seconds
+            current_status = "Starting..."
+            
+            async def update_progress():
+                """Background task to update progress with elapsed time."""
+                nonlocal last_update
+                while process.returncode is None:
+                    await asyncio.sleep(5)
+                    now = asyncio.get_event_loop().time()
+                    elapsed = int(now - start_time)
+                    mins, secs = divmod(elapsed, 60)
+                    try:
+                        await progress_msg.edit_text(
+                            f"🔄 **Training Progress**\n\n"
+                            f"{current_status}\n\n"
+                            f"⏱ Elapsed: {mins}m {secs}s",
+                            parse_mode="Markdown"
+                        )
+                    except Exception:
+                        pass
+            
+            # Start progress updater
+            progress_task = asyncio.create_task(update_progress())
             
             async def read_output():
-                nonlocal last_update
-                current_status = "Starting..."
+                nonlocal current_status
                 
                 while True:
                     line = await process.stdout.readline()
@@ -558,36 +580,23 @@ class AdminCommandHandler:
                         elif "TF-IDF features" in line_text:
                             current_status = f"⚙️ {line_text}"
                         elif "Training LightGBM" in line_text:
-                            current_status = "🧠 Training model..."
+                            current_status = "🧠 Training model (5-fold CV)..."
                         elif "CV Macro F1" in line_text:
                             current_status = f"📈 {line_text}"
                         elif "Calibrating" in line_text:
-                            current_status = "🎯 Calibrating..."
+                            current_status = "🎯 Calibrating probabilities..."
                         elif "Saving" in line_text or "Model saved" in line_text:
                             current_status = "💾 Saving model..."
                         elif "SUCCESS" in line_text or "Complete" in line_text:
                             current_status = "✅ Complete!"
-                        
-                        # Update Telegram message periodically
-                        now = asyncio.get_event_loop().time()
-                        if now - last_update >= update_interval:
-                            last_update = now
-                            try:
-                                await progress_msg.edit_text(
-                                    f"🔄 **Training Progress**\n\n"
-                                    f"{current_status}",
-                                    parse_mode="Markdown"
-                                )
-                            except Exception:
-                                pass  # Ignore edit errors
-                
-                return current_status
             
             # Wait for process with timeout
             try:
-                final_status = await asyncio.wait_for(read_output(), timeout=1800)
+                await asyncio.wait_for(read_output(), timeout=1800)
                 await process.wait()
+                progress_task.cancel()
             except asyncio.TimeoutError:
+                progress_task.cancel()
                 process.kill()
                 await progress_msg.edit_text(
                     "❌ **Retrain Timeout**\n\n"
