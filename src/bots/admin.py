@@ -502,7 +502,7 @@ class AdminCommandHandler:
                 return
             
             # Build command
-            cmd = [sys.executable, str(script_path)]
+            cmd = [sys.executable, "-u", str(script_path)]  # -u for unbuffered output
             if force:
                 cmd.append("--force")
             else:
@@ -510,32 +510,99 @@ class AdminCommandHandler:
             
             _LOGGER.info("Starting retrain subprocess: %s", " ".join(cmd))
             
-            # Run in background thread to not block
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=1800  # 30 minute timeout
-                )
+            # Send initial progress message that we'll edit
+            progress_msg = await update.message.reply_text(
+                "🔄 **Training Progress**\n\n"
+                "⏳ Starting...",
+                parse_mode="Markdown"
             )
             
-            # Log stdout and stderr to journalctl
-            if result.stdout:
-                for line in result.stdout.strip().split('\n'):
-                    _LOGGER.info("[retrain] %s", line)
-            if result.stderr:
-                for line in result.stderr.strip().split('\n'):
-                    _LOGGER.warning("[retrain] %s", line)
+            # Run with Popen for real-time output
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
             
-            _LOGGER.info("Retrain subprocess finished with code: %d", result.returncode)
+            output_lines = []
+            last_update = asyncio.get_event_loop().time()
+            update_interval = 3  # Update Telegram every 3 seconds
+            
+            async def read_output():
+                nonlocal last_update
+                current_status = "Starting..."
+                
+                while True:
+                    line = await process.stdout.readline()
+                    if not line:
+                        break
+                    
+                    line_text = line.decode('utf-8', errors='ignore').strip()
+                    if line_text:
+                        output_lines.append(line_text)
+                        _LOGGER.info("[retrain] %s", line_text)
+                        
+                        # Update current status based on keywords
+                        if "Loading training data" in line_text:
+                            current_status = "📥 Loading data..."
+                        elif "From Logs" in line_text:
+                            current_status = f"📥 {line_text}"
+                        elif "From ML_Tracking" in line_text:
+                            current_status = f"📥 {line_text}"
+                        elif "Deduplicated" in line_text:
+                            current_status = f"🔄 {line_text}"
+                        elif "Total training data" in line_text:
+                            current_status = f"📊 {line_text}"
+                        elif "Preprocessing" in line_text:
+                            current_status = "⚙️ Preprocessing..."
+                        elif "TF-IDF features" in line_text:
+                            current_status = f"⚙️ {line_text}"
+                        elif "Training LightGBM" in line_text:
+                            current_status = "🧠 Training model..."
+                        elif "CV Macro F1" in line_text:
+                            current_status = f"📈 {line_text}"
+                        elif "Calibrating" in line_text:
+                            current_status = "🎯 Calibrating..."
+                        elif "Saving" in line_text or "Model saved" in line_text:
+                            current_status = "💾 Saving model..."
+                        elif "SUCCESS" in line_text or "Complete" in line_text:
+                            current_status = "✅ Complete!"
+                        
+                        # Update Telegram message periodically
+                        now = asyncio.get_event_loop().time()
+                        if now - last_update >= update_interval:
+                            last_update = now
+                            try:
+                                await progress_msg.edit_text(
+                                    f"🔄 **Training Progress**\n\n"
+                                    f"{current_status}",
+                                    parse_mode="Markdown"
+                                )
+                            except Exception:
+                                pass  # Ignore edit errors
+                
+                return current_status
+            
+            # Wait for process with timeout
+            try:
+                final_status = await asyncio.wait_for(read_output(), timeout=1800)
+                await process.wait()
+            except asyncio.TimeoutError:
+                process.kill()
+                await progress_msg.edit_text(
+                    "❌ **Retrain Timeout**\n\n"
+                    "Process took longer than 30 minutes.",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            # Get full output
+            output = "\n".join(output_lines)
+            
+            _LOGGER.info("Retrain subprocess finished with code: %d", process.returncode)
             
             # Check result
-            if result.returncode == 0:
-                # Parse output for version
-                output = result.stdout
+            if process.returncode == 0:
                 
                 # Check if actually retrained or skipped
                 if "skipping retrain" in output.lower():
@@ -611,10 +678,10 @@ class AdminCommandHandler:
                     parse_mode="Markdown"
                 )
                 
-        except subprocess.TimeoutExpired:
+        except asyncio.TimeoutError:
             await update.message.reply_text(
                 "❌ **Retrain Timeout**\n\n"
-                "Process took longer than 5 minutes.\n"
+                "Process took longer than 30 minutes.\n"
                 "Try running manually on server.",
                 parse_mode="Markdown"
             )
