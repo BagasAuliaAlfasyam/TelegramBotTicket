@@ -12,9 +12,12 @@ Usage:
     python scripts/batch_predict.py                  # Use .env config
     python scripts/batch_predict.py --spreadsheet "Log_Tiket_MyTech"  # Override spreadsheet
     python scripts/batch_predict.py --dry-run        # Preview without updating
+    python scripts/batch_predict.py --env-file /path/to/.env  # Custom .env path
+    python scripts/batch_predict.py --credentials /path/to/creds.json  # Custom credentials
 """
 
 import sys
+import os
 import argparse
 from pathlib import Path
 
@@ -28,8 +31,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import joblib
 import lightgbm as lgb
-
-from src.core.config import Config
+from dotenv import load_dotenv
 
 # Configuration defaults (overridable via args or config)
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -142,27 +144,62 @@ def parse_args():
     parser.add_argument('--spreadsheet', '-s', type=str, help='Override spreadsheet name from config')
     parser.add_argument('--dry-run', '-d', action='store_true', help='Preview without updating sheets')
     parser.add_argument('--model-version', '-m', type=str, help='Specific model version to use (e.g., v1, v2)')
+    parser.add_argument('--env-file', '-e', type=str, help='Path to .env file (default: project .env)')
+    parser.add_argument('--credentials', '-c', type=str, help='Path to Google service account JSON')
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
     
-    # Load config from .env
-    config = Config.from_env()
+    # Load .env from custom path or try common locations
+    if args.env_file:
+        env_path = Path(args.env_file)
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
+            print(f"Loaded env from: {env_path}")
+        else:
+            print(f"⚠️ Warning: env file not found: {env_path}")
+    else:
+        # Try common locations
+        env_paths = [
+            PROJECT_ROOT / '.env.local',
+            PROJECT_ROOT / '.env',
+            Path.home() / '.telegram-bot.env',
+            Path('/etc/telegram-bot/.env'),
+        ]
+        for env_path in env_paths:
+            if env_path.exists():
+                load_dotenv(env_path, override=True)
+                print(f"Loaded env from: {env_path}")
+                break
     
-    # Determine spreadsheet name
-    spreadsheet_name = args.spreadsheet or config.google_spreadsheet_name
+    # Determine spreadsheet name (priority: arg > env var > default)
+    spreadsheet_name = args.spreadsheet or os.getenv('GOOGLE_SPREADSHEET_NAME', '')
     if not spreadsheet_name:
-        print("❌ Error: No spreadsheet name. Set GOOGLE_SPREADSHEET_NAME in .env or use --spreadsheet")
+        print("❌ Error: No spreadsheet name. Set GOOGLE_SPREADSHEET_NAME or use --spreadsheet")
         sys.exit(1)
     
-    # Determine credentials file
-    cred_file = config.google_service_account_json
-    if not cred_file.exists():
-        cred_file = PROJECT_ROOT / 'white-set-293710-9cca41a1afd6.json'
+    # Determine credentials file (priority: arg > env var > default)
+    if args.credentials:
+        cred_file = Path(args.credentials)
+    else:
+        cred_env = os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON', '')
+        if cred_env:
+            cred_file = Path(cred_env)
+        else:
+            cred_file = PROJECT_ROOT / 'white-set-293710-9cca41a1afd6.json'
     
-    model_dir = config.model_dir if config.model_dir.exists() else DEFAULT_MODEL_DIR
+    if not cred_file.exists():
+        print(f"❌ Error: Credentials file not found: {cred_file}")
+        sys.exit(1)
+    
+    # Determine model dir
+    model_dir_env = os.getenv('MODEL_DIR', '')
+    if model_dir_env:
+        model_dir = Path(model_dir_env)
+    else:
+        model_dir = DEFAULT_MODEL_DIR
     
     print("=" * 70)
     print("BATCH PREDICTION - Update Logs & ML_Tracking")
