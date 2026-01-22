@@ -38,11 +38,13 @@ TelegramBotMyTech/
 │   ├── run_all.py                # 🌟 Unified: Run both bots in one process
 │   ├── run_collecting.py         # Start collecting bot only
 │   └── run_reporting.py          # Start reporting bot only
-├── models/                       # ML model artifacts
-│   ├── lgb_model_v2.txt
-│   ├── tfidf_vectorizer_v2.pkl
-│   ├── label_encoder_v2.pkl
-│   └── model_metadata_v2.json
+├── models/                       # ML model artifacts (versioned)
+│   ├── v1/
+│   │   ├── lgb_model.bin
+│   │   ├── tfidf_vectorizer.pkl
+│   │   └── label_encoder.pkl
+│   ├── current_version.txt      # Active version pointer
+│   └── versions.json            # Version history
 ├── .env                          # Environment variables
 ├── .env.local                    # Local overrides (gitignored)
 ├── requirements.txt
@@ -85,7 +87,7 @@ S3_BUCKET_NAME=your_bucket
 S3_REGION=ap-southeast-1
 
 # ML Settings
-MODEL_VERSION=v2
+MODEL_VERSION=auto  # auto = read from current_version.txt
 ML_THRESHOLD_AUTO=0.90
 ML_THRESHOLD_HIGH=0.85
 ML_THRESHOLD_MEDIUM=0.70

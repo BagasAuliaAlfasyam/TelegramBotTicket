@@ -2,21 +2,32 @@
 
 ## Overview
 
-Model ML v2.0 terintegrasi untuk klasifikasi otomatis tiket berdasarkan `tech_raw_text` dan `solving`.
+Model ML terintegrasi untuk klasifikasi otomatis tiket berdasarkan `tech_raw_text` dan `solving`.
 
-## Files Created/Modified
+## Project Structure
 
-### New Files
-- `ml_classifier.py` - ML model wrapper dengan predict method
-- `ml_tracking.py` - Audit trail & monitoring ke Google Sheets
-- `admin_commands.py` - Admin command handlers (/stats, /report, etc)
-- `models/` - Folder berisi model artifacts
+### Source Code
+- `src/ml/classifier.py` - ML model wrapper dengan predict method
+- `src/ml/tracking.py` - Audit trail & monitoring ke Google Sheets
+- `src/ml/preprocessing.py` - Domain-aware text preprocessing
+- `src/bots/admin.py` - Admin command handlers (/stats, /report, etc)
 
-### Modified Files
-- `main_collecting.py` - Initialize ML components
-- `collecting_bot.py` - Integrate ML prediction di message handler
-- `google_sheets_client.py` - Support column T (Symtomps)
-- `requirements.txt` - Added ML dependencies
+### Model Artifacts (Versioned)
+```
+models/
+├── v1/
+│   ├── lgb_model.bin         # LightGBM model (binary)
+│   ├── tfidf_vectorizer.pkl  # Word + Char TF-IDF
+│   ├── label_encoder.pkl     # Label encoder
+│   ├── preprocessor.pkl      # Text preprocessor
+│   └── metadata.json         # Model metadata
+├── current_version.txt       # Active version pointer
+└── versions.json             # Version history
+```
+
+### Scripts
+- `scripts/retrain.py` - Retrain model dengan auto-versioning
+- `scripts/sync_training_data.py` - Sync Logs → ML_Tracking sheet
 
 ## Architecture
 
@@ -43,11 +54,11 @@ Model ML v2.0 terintegrasi untuk klasifikasi otomatis tiket berdasarkan `tech_ra
 
 | Property | Value |
 |----------|-------|
-| Model | LightGBM v2.0 |
-| Classes | 39 symptom categories |
-| Training Accuracy | 83.13% |
-| Accuracy at AUTO (≥90%) | 95.85% |
-| Features | TF-IDF (tech_raw_text + solving) |
+| Model | LightGBM (versioned) |
+| Classes | 35 symptom categories |
+| Features | Word TF-IDF (1-3 ngram) + Char TF-IDF (3-5 ngram) |
+| Training Source | ML_Tracking sheet (single source of truth) |
+| Hot Reload | ✅ Yes, via /reloadmodel command |
 
 ## Confidence Thresholds
 
@@ -99,9 +110,13 @@ Model ML v2.0 terintegrasi untuk klasifikasi otomatis tiket berdasarkan `tech_ra
 | `/stats` | Statistik prediksi hari ini |
 | `/report weekly` | Report 7 hari terakhir |
 | `/report monthly` | Report 30 hari terakhir |
-| `/model_status` | Info model saat ini |
-| `/pending_review` | Items yang perlu direview |
-| `/help_ml` | Help admin commands |
+| `/modelstatus` | Info model saat ini |
+| `/pendingreview` | Items yang perlu direview |
+| `/retrainstatus` | Cek data tersedia untuk retrain |
+| `/retrain` | Retrain model + auto-reload |
+| `/retrain force` | Paksa retrain tanpa cek threshold |
+| `/reloadmodel` | Hot reload model |
+| `/helpml` | Help admin commands |
 
 ## Sample Output
 
@@ -132,8 +147,8 @@ Review Status:
 # Install dependencies
 pip install -r requirements.txt
 
-# Run bot
-python main_collecting.py
+# Run both bots
+python scripts/run_all.py
 ```
 
 ## Logs
@@ -146,9 +161,19 @@ Bot akan log:
 
 ## Retraining Model
 
-Untuk retrain model dengan data baru:
+### Via Telegram (Recommended)
+```
+/retrain force
+```
+Model akan auto-reload setelah selesai. Tidak perlu restart bot!
 
-1. Export data dari `ML_Tracking` sheet (reviewed items only)
-2. Jalankan training notebook di `Analyst/Cleaning.ipynb`
-3. Copy model baru ke `TelegramBotMyTech/models/`
-4. Restart bot
+### Via Terminal
+```bash
+# Sync data dulu (Logs → ML_Tracking)
+python scripts/sync_training_data.py
+
+# Retrain
+python scripts/retrain.py --force
+```
+
+Model baru akan tersimpan di folder versioned (`models/v2/`, `models/v3/`, dst) dan otomatis aktif.
