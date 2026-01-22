@@ -518,7 +518,7 @@ class AdminCommandHandler:
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=600  # 10 minute timeout for Optuna
+                    timeout=1800  # 30 minute timeout
                 )
             )
             
