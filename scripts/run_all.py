@@ -3,7 +3,7 @@
 Unified Bot Runner
 ===================
 Run both collecting and reporting bots in a single process.
-Retrain is triggered manually or via scheduler, not included here.
+Includes hourly monitoring stats scheduler.
 
 Usage:
     python scripts/run_all.py
@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
@@ -121,6 +122,55 @@ async def run_reporting_bot(
         await application.shutdown()
 
 
+async def run_monitoring_scheduler(
+    ml_classifier: MLClassifier | None,
+    ml_tracking: MLTrackingClient | None,
+    logger: logging.Logger,
+    interval_seconds: int = 3600,  # 1 hour default
+) -> None:
+    """
+    Background scheduler to update Monitoring sheet stats hourly.
+    
+    Args:
+        ml_classifier: ML classifier for model version
+        ml_tracking: ML tracking client
+        logger: Logger instance
+        interval_seconds: Update interval (default 1 hour)
+    """
+    if not ml_tracking:
+        logger.warning("ML Tracking not initialized, monitoring scheduler disabled")
+        return
+    
+    logger.info("Starting Monitoring Scheduler (interval: %d seconds)", interval_seconds)
+    
+    try:
+        while True:
+            # Wait for the interval first (stats at startup might be empty)
+            await asyncio.sleep(interval_seconds)
+            
+            try:
+                model_version = ml_classifier.model_version if ml_classifier else "unknown"
+                
+                logger.info("Scheduler: Updating monitoring stats...")
+                stats = ml_tracking.calculate_and_update_daily_stats(model_version)
+                
+                if stats:
+                    logger.info(
+                        "Scheduler: Stats updated - %d predictions, %.1f%% avg confidence",
+                        stats.get("total_predictions", 0),
+                        stats.get("avg_confidence", 0) * 100
+                    )
+                else:
+                    logger.debug("Scheduler: No predictions today to update")
+                    
+            except Exception as e:
+                logger.error("Scheduler: Failed to update stats: %s", e)
+                
+    except asyncio.CancelledError:
+        logger.info("Stopping Monitoring Scheduler...")
+        raise
+
+
 async def main_async(
     config: Config,
     sheets_client: GoogleSheetsClient,
@@ -161,8 +211,21 @@ async def main_async(
     )
     tasks.append(reporting_task)
     
+    # Monitoring scheduler task (hourly stats update)
+    scheduler_task = asyncio.create_task(
+        run_monitoring_scheduler(
+            ml_classifier=ml_classifier,
+            ml_tracking=ml_tracking,
+            logger=logger,
+            interval_seconds=3600,  # 1 hour
+        ),
+        name="monitoring_scheduler"
+    )
+    tasks.append(scheduler_task)
+    
     logger.info("=" * 50)
     logger.info("All bots are running. Press Ctrl+C to stop.")
+    logger.info("Monitoring stats update: every 1 hour")
     logger.info("=" * 50)
     
     # Wait for all tasks, handle shutdown gracefully

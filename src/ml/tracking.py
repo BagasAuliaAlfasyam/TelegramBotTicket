@@ -378,3 +378,111 @@ class MLTrackingClient:
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed to get AUTO count: %s", exc)
             return 0
+    
+    def calculate_and_update_daily_stats(self, model_version: str = "unknown") -> dict:
+        """
+        Hitung stats dari ML_Tracking sheet dan update ke Monitoring sheet.
+        
+        Returns:
+            dict dengan stats hari ini
+        """
+        if not self._tracking_sheet:
+            _LOGGER.warning("Tracking sheet not connected, cannot calculate stats")
+            return {}
+        
+        try:
+            today = date.today()
+            today_str = today.isoformat()
+            
+            all_data = self._tracking_sheet.get_all_values()
+            if len(all_data) <= 1:
+                _LOGGER.info("No data in ML_Tracking to calculate stats")
+                return {}
+            
+            # Filter rows untuk hari ini
+            # Column index: 1=timestamp, 5=ml_confidence, 6=prediction_status, 8=review_status
+            total_predictions = 0
+            confidence_sum = 0.0
+            auto_count = 0
+            high_count = 0
+            medium_count = 0
+            manual_count = 0
+            reviewed_count = 0
+            
+            for row in all_data[1:]:
+                if len(row) < 9:
+                    continue
+                
+                # Check if row is from today (timestamp in column 1)
+                timestamp_str = row[1]
+                try:
+                    if timestamp_str.startswith(today_str) or today_str in timestamp_str:
+                        total_predictions += 1
+                        
+                        # Confidence
+                        try:
+                            confidence = float(row[5]) if row[5] else 0.0
+                            confidence_sum += confidence
+                        except ValueError:
+                            pass
+                        
+                        # Prediction status
+                        status = row[6]
+                        if status == "AUTO":
+                            auto_count += 1
+                        elif status == "HIGH_REVIEW":
+                            high_count += 1
+                        elif status == "MEDIUM_REVIEW":
+                            medium_count += 1
+                        elif status == "MANUAL":
+                            manual_count += 1
+                        
+                        # Review status
+                        if len(row) > 8 and row[8] in ("APPROVED", "CORRECTED"):
+                            reviewed_count += 1
+                except Exception:
+                    continue
+            
+            if total_predictions == 0:
+                _LOGGER.info("No predictions today in ML_Tracking")
+                return {}
+            
+            avg_confidence = confidence_sum / total_predictions
+            accuracy = reviewed_count / total_predictions if total_predictions > 0 else 0.0
+            
+            stats = {
+                "date": today_str,
+                "total_predictions": total_predictions,
+                "avg_confidence": avg_confidence,
+                "auto_count": auto_count,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "manual_count": manual_count,
+                "reviewed_count": reviewed_count,
+                "accuracy": accuracy,
+                "model_version": model_version,
+            }
+            
+            # Update Monitoring sheet
+            self.update_daily_stats(
+                model_version=model_version,
+                total_predictions=total_predictions,
+                avg_confidence=avg_confidence * 100,  # Convert to percentage
+                auto_count=auto_count,
+                high_count=high_count,
+                medium_count=medium_count,
+                manual_count=manual_count,
+                reviewed_count=reviewed_count,
+                accuracy=accuracy * 100,  # Convert to percentage
+            )
+            
+            _LOGGER.info(
+                "Updated monitoring stats: %d predictions, %.1f%% avg confidence, %d AUTO",
+                total_predictions, avg_confidence * 100, auto_count
+            )
+            
+            return stats
+            
+        except (GSpreadException, APIError) as exc:
+            _LOGGER.exception("Failed to calculate daily stats: %s", exc)
+            return {}

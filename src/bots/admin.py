@@ -332,6 +332,10 @@ class AdminCommandHandler:
             "**/pendingreview**\n"
             "└ Lihat tiket yang butuh review manual\n\n"
             
+            "**/updatestats**\n"
+            "└ Update statistik ke Monitoring sheet\n"
+            "└ (otomatis jalan tiap jam)\n\n"
+            
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "🔄 **RETRAINING**\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -596,6 +600,56 @@ class AdminCommandHandler:
             _LOGGER.exception("Error during retrain: %s", e)
             await update.message.reply_text(f"❌ Error: {e}")
 
+    async def update_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /updatestats - Hitung ulang dan update statistik ke Monitoring sheet
+        
+        Otomatis jalan tiap jam, tapi bisa trigger manual via command ini.
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+        
+        if not self._ml_tracking:
+            await update.message.reply_text("❌ ML Tracking not initialized")
+            return
+        
+        await update.message.reply_text("🔄 Calculating and updating stats...")
+        
+        try:
+            model_version = "unknown"
+            if self._ml_classifier:
+                model_version = self._ml_classifier.model_version
+            
+            stats = self._ml_tracking.calculate_and_update_daily_stats(model_version)
+            
+            if not stats:
+                await update.message.reply_text(
+                    "📊 **Stats Update**\n\n"
+                    "No predictions today yet.",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            message = (
+                f"✅ **Stats Updated to Monitoring Sheet!**\n\n"
+                f"📅 Date: {stats.get('date', 'N/A')}\n"
+                f"📈 Total Predictions: {stats.get('total_predictions', 0)}\n"
+                f"🎯 Avg Confidence: {stats.get('avg_confidence', 0)*100:.1f}%\n\n"
+                f"**Distribution:**\n"
+                f"  ✅ AUTO: {stats.get('auto_count', 0)}\n"
+                f"  🔶 HIGH: {stats.get('high_count', 0)}\n"
+                f"  🟡 MEDIUM: {stats.get('medium_count', 0)}\n"
+                f"  🔴 MANUAL: {stats.get('manual_count', 0)}\n\n"
+                f"📝 Reviewed: {stats.get('reviewed_count', 0)}\n"
+                f"🤖 Model: {stats.get('model_version', 'N/A')}"
+            )
+            
+            await update.message.reply_text(message, parse_mode="Markdown")
+            
+        except Exception as e:
+            _LOGGER.error("Error updating stats: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+
 
 class TrendAlertService:
     """Background service for trend analysis and auto-alerts."""
@@ -697,6 +751,7 @@ def build_reporting_application(
     application.add_handler(CommandHandler("report", admin_handler.report))
     application.add_handler(CommandHandler("modelstatus", admin_handler.model_status))
     application.add_handler(CommandHandler("pendingreview", admin_handler.pending_review))
+    application.add_handler(CommandHandler("updatestats", admin_handler.update_stats))
     application.add_handler(CommandHandler("retrainstatus", admin_handler.retrain_status))
     application.add_handler(CommandHandler("retrain", admin_handler.retrain))
     application.add_handler(CommandHandler("reloadmodel", admin_handler.reload_model))
