@@ -377,6 +377,26 @@ class ModelRetrainer:
         
         df = pd.DataFrame(data[1:], columns=data[0])
         
+        # ========================================
+        # FILTER BY REVIEW STATUS
+        # Only use APPROVED or CORRECTED data for training
+        # - APPROVED: prediction was correct
+        # - CORRECTED: prediction was wrong, label has been fixed
+        # - pending/SKIPPED: not reviewed or ignored
+        # ========================================
+        if 'review_status' in df.columns:
+            valid_statuses = ['APPROVED', 'CORRECTED']
+            before_count = len(df)
+            df = df[df['review_status'].isin(valid_statuses)]
+            after_count = len(df)
+            _LOGGER.info(f"  Filtered by review_status (APPROVED/CORRECTED): {after_count}/{before_count} rows")
+            
+            if after_count == 0:
+                _LOGGER.warning("  No approved/corrected data found in ML_Tracking!")
+                return None
+        else:
+            _LOGGER.warning("  review_status column not found - using all data (legacy mode)")
+        
         # Rename columns to match expected format
         column_mapping = {
             'tech_raw_text': 'tech raw text',
