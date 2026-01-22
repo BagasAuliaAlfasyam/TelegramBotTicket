@@ -374,13 +374,12 @@ class AdminCommandHandler:
             return
         
         try:
-            # Get reviewed count from ML_Tracking
+            # Get reviewed count (APPROVED + CORRECTED) from ML_Tracking
             reviewed_count = self._ml_tracking.get_reviewed_count()
-            auto_count = self._ml_tracking.get_auto_count()
-            total_available = reviewed_count + auto_count
+            trained_count = self._ml_tracking.get_trained_count()
             
             min_samples = 100  # Minimum for retraining
-            ready = total_available >= min_samples
+            ready = reviewed_count >= min_samples
             
             if self._ml_classifier:
                 current_version = self._ml_classifier.model_version
@@ -396,16 +395,15 @@ class AdminCommandHandler:
                 f"**Current Model:** {current_version}\n"
                 f"**Training Samples:** {current_samples}\n\n"
                 f"**New Data Available:**\n"
-                f"  📝 Reviewed: {reviewed_count}\n"
-                f"  ✅ AUTO (trusted): {auto_count}\n"
-                f"  📊 Total: {total_available}\n\n"
-                f"**Status:** {status_emoji} {'Ready for retrain!' if ready else f'Need {min_samples - total_available} more samples'}\n\n"
+                f"  📝 Ready for Training: {reviewed_count}\n"
+                f"  ✅ Already Trained: {trained_count}\n\n"
+                f"**Status:** {status_emoji} {'Ready for retrain!' if ready else f'Need {min_samples - reviewed_count} more samples'}\n\n"
             )
             
             if ready:
                 message += (
-                    "To retrain, run on server:\n"
-                    "`python -m scripts.retrain`"
+                    "💡 Use `/retrain` to start training\n"
+                    "Or `/retrain force` to force retrain"
                 )
             
             await update.message.reply_text(message, parse_mode="Markdown")
@@ -562,9 +560,15 @@ class AdminCommandHandler:
                 if new_version and self._ml_classifier:
                     success = self._ml_classifier.reload(new_version)
                     if success:
+                        # Mark reviewed data as TRAINED
+                        trained_count = 0
+                        if self._ml_tracking:
+                            trained_count = self._ml_tracking.mark_as_trained()
+                        
                         await update.message.reply_text(
                             f"🎉 **Model Active!**\n\n"
                             f"Bot is now using {new_version}.\n"
+                            f"📝 Marked {trained_count} rows as TRAINED.\n"
                             f"No restart needed!",
                             parse_mode="Markdown"
                         )
@@ -575,9 +579,15 @@ class AdminCommandHandler:
                             parse_mode="Markdown"
                         )
                 else:
+                    # Mark reviewed data as TRAINED anyway
+                    trained_count = 0
+                    if self._ml_tracking:
+                        trained_count = self._ml_tracking.mark_as_trained()
+                    
                     await update.message.reply_text(
-                        "⚠️ Retrain succeeded!\n"
-                        "Use `/reloadmodel` to load the new model.",
+                        f"⚠️ Retrain succeeded!\n"
+                        f"📝 Marked {trained_count} rows as TRAINED.\n"
+                        f"Use `/reloadmodel` to load the new model.",
                         parse_mode="Markdown"
                     )
             else:

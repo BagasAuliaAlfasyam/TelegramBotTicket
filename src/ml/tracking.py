@@ -342,7 +342,7 @@ class MLTrackingClient:
             return {}
     
     def get_reviewed_count(self) -> int:
-        """Get count of reviewed predictions (APPROVED + CORRECTED)."""
+        """Get count of reviewed predictions ready for training (APPROVED + CORRECTED)."""
         if not self._tracking_sheet:
             return 0
         
@@ -351,10 +351,17 @@ class MLTrackingClient:
             if len(all_data) <= 1:
                 return 0
             
-            # Count APPROVED and CORRECTED
+            # Find review_status column from header
+            headers = all_data[0]
+            review_col = headers.index("review_status") if "review_status" in headers else -1
+            if review_col == -1:
+                _LOGGER.warning("review_status column not found in ML_Tracking")
+                return 0
+            
+            # Count APPROVED and CORRECTED (ready for training)
             count = sum(
                 1 for row in all_data[1:] 
-                if len(row) > 8 and row[8] in ("APPROVED", "CORRECTED")
+                if len(row) > review_col and row[review_col] in ("APPROVED", "CORRECTED")
             )
             return count
             
@@ -362,8 +369,8 @@ class MLTrackingClient:
             _LOGGER.exception("Failed to get reviewed count: %s", exc)
             return 0
     
-    def get_auto_count(self) -> int:
-        """Get count of AUTO predictions (trusted)."""
+    def get_trained_count(self) -> int:
+        """Get count of already trained data (TRAINED status)."""
         if not self._tracking_sheet:
             return 0
         
@@ -372,13 +379,73 @@ class MLTrackingClient:
             if len(all_data) <= 1:
                 return 0
             
-            count = sum(1 for row in all_data[1:] if len(row) > 6 and row[6] == "AUTO")
+            # Find review_status column from header
+            headers = all_data[0]
+            review_col = headers.index("review_status") if "review_status" in headers else -1
+            if review_col == -1:
+                return 0
+            
+            count = sum(
+                1 for row in all_data[1:] 
+                if len(row) > review_col and row[review_col] == "TRAINED"
+            )
             return count
             
         except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to get AUTO count: %s", exc)
+            _LOGGER.exception("Failed to get trained count: %s", exc)
             return 0
     
+    def mark_as_trained(self, row_indices: list[int] = None) -> int:
+        """
+        Mark reviewed rows as TRAINED after successful training.
+        
+        Args:
+            row_indices: Specific row indices to mark, or None to mark all APPROVED/CORRECTED
+            
+        Returns:
+            Number of rows marked as TRAINED
+        """
+        if not self._tracking_sheet:
+            return 0
+        
+        try:
+            all_data = self._tracking_sheet.get_all_values()
+            if len(all_data) <= 1:
+                return 0
+            
+            # Find review_status column
+            headers = all_data[0]
+            review_col = headers.index("review_status") if "review_status" in headers else -1
+            if review_col == -1:
+                _LOGGER.warning("review_status column not found")
+                return 0
+            
+            # Find rows to update
+            updates = []
+            for i, row in enumerate(all_data[1:], start=2):  # 1-indexed, skip header
+                if len(row) > review_col and row[review_col] in ("APPROVED", "CORRECTED"):
+                    # gspread uses A1 notation
+                    cell = gspread.utils.rowcol_to_a1(i, review_col + 1)
+                    updates.append({
+                        'range': cell,
+                        'values': [['TRAINED']]
+                    })
+            
+            if updates:
+                # Batch update in chunks
+                chunk_size = 100
+                for i in range(0, len(updates), chunk_size):
+                    chunk = updates[i:i+chunk_size]
+                    self._tracking_sheet.batch_update(chunk, value_input_option='RAW')
+                
+                _LOGGER.info("Marked %d rows as TRAINED", len(updates))
+            
+            return len(updates)
+            
+        except (GSpreadException, APIError) as exc:
+            _LOGGER.exception("Failed to mark rows as trained: %s", exc)
+            return 0
+
     def calculate_and_update_daily_stats(self, model_version: str = "unknown") -> dict:
         """
         Hitung stats dari ML_Tracking sheet dan update ke Monitoring sheet.
