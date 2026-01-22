@@ -228,19 +228,29 @@ def main():
     logs_ws = spreadsheet.worksheet('Logs')
     
     # Get or create ML_Tracking
+    # Headers aligned with sync_training_data.py + extra columns for review
+    ml_tracking_headers = [
+        'tech_message_id', 'timestamp', 'tech_raw_text', 'solving',
+        'Symtomps', 'sync_date', 'source',
+        'ml_confidence', 'prediction_status', 'review_status', 'logs_row_number'
+    ]
+    
     try:
         tracking_ws = spreadsheet.worksheet('ML_Tracking')
         print("  ML_Tracking sheet exists")
+        
+        # Check if headers need updating (add new columns if missing)
+        existing_headers = tracking_ws.row_values(1)
+        if len(existing_headers) < len(ml_tracking_headers):
+            # Add missing columns to header
+            for i, h in enumerate(ml_tracking_headers):
+                if i >= len(existing_headers):
+                    tracking_ws.update_cell(1, i + 1, h)
+            print(f"  Updated ML_Tracking headers (added {len(ml_tracking_headers) - len(existing_headers)} columns)")
+            
     except gspread.WorksheetNotFound:
         tracking_ws = spreadsheet.add_worksheet(title='ML_Tracking', rows=1000, cols=15)
-        # Add headers
-        headers = [
-            'timestamp', 'tech_message_id', 'tech_raw_text', 'solving',
-            'predicted_symtomps', 'ml_confidence', 'prediction_status',
-            'reviewed_symtomps', 'review_status', 'reviewer', 'review_timestamp',
-            'logs_row_number'
-        ]
-        tracking_ws.update('A1', [headers])
+        tracking_ws.update(values=[ml_tracking_headers], range_name='A1')
         print("  Created ML_Tracking sheet")
     
     # === 2. Fetch Logs data ===
@@ -309,19 +319,19 @@ def main():
             logs_updates.append((row_num, pred['label']))
         else:
             # Add to ML_Tracking for review
+            # Structure matches sync_training_data.py + extra columns for review
             tracking_row = [
-                timestamp,
-                str(row.get('tech message id', '')),
-                str(row.get('tech raw text', ''))[:500],  # Limit length
-                str(row.get('solving', ''))[:200],
-                pred['label'],
-                f"{pred['confidence']:.4f}",
-                pred['status'],
-                '',  # reviewed_symtomps
+                str(row.get('tech message id', '')),  # tech_message_id
+                timestamp,  # timestamp
+                str(row.get('tech raw text', ''))[:500],  # tech_raw_text
+                str(row.get('solving', ''))[:200],  # solving
+                pred['label'],  # Symtomps (predicted)
+                timestamp,  # sync_date
+                'BATCH_PREDICT',  # source
+                f"{pred['confidence']:.4f}",  # ml_confidence
+                pred['status'],  # prediction_status
                 'pending',  # review_status
-                '',  # reviewer
-                '',  # review_timestamp
-                str(row_num)  # logs_row_number for reference
+                str(row_num),  # logs_row_number
             ]
             tracking_rows.append(tracking_row)
     
@@ -362,6 +372,12 @@ def main():
             # Get current row count
             existing = tracking_ws.get_all_values()
             next_row = len(existing) + 1
+            
+            # Expand sheet if needed
+            rows_needed = next_row + len(tracking_rows)
+            if rows_needed > tracking_ws.row_count:
+                tracking_ws.add_rows(rows_needed - tracking_ws.row_count + 100)
+                print(f"    Expanded sheet to {tracking_ws.row_count} rows")
             
             # Append in chunks
             chunk_size = 100
