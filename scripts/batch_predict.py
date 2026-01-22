@@ -7,9 +7,15 @@ Predict semua data yang Symtomps-nya kosong dan update ke Google Sheets.
 Logic:
 - Confidence >= 90% (AUTO): Insert langsung ke Logs.Symtomps
 - Confidence < 90%: Tambah ke ML_Tracking untuk review, Logs.Symtomps tetap kosong
+
+Usage:
+    python scripts/batch_predict.py                  # Use .env config
+    python scripts/batch_predict.py --spreadsheet "Log_Tiket_MyTech"  # Override spreadsheet
+    python scripts/batch_predict.py --dry-run        # Preview without updating
 """
 
 import sys
+import argparse
 from pathlib import Path
 
 # Add src to path
@@ -23,31 +29,64 @@ from google.oauth2.service_account import Credentials
 import joblib
 import lightgbm as lgb
 
-# Configuration
-CREDENTIALS_FILE = Path(__file__).parent.parent / 'white-set-293710-9cca41a1afd6.json'
-SPREADSHEET_NAME = 'Log_Tiket_MyTech_ML_Test'
-MODEL_DIR = Path(__file__).parent.parent / 'models'
+from src.core.config import Config
+
+# Configuration defaults (overridable via args or config)
+PROJECT_ROOT = Path(__file__).parent.parent
+DEFAULT_MODEL_DIR = PROJECT_ROOT / 'models'
 
 # Thresholds
 AUTO_THRESHOLD = 0.90  # >= 90% confidence = AUTO (insert to Symtomps)
 
 
-def load_model():
-    """Load model and vectorizer"""
-    print("Loading model...")
+def get_current_version(model_dir: Path) -> str:
+    """Get current model version from current_version.txt or default to v1."""
+    version_file = model_dir / "current_version.txt"
+    if version_file.exists():
+        return version_file.read_text().strip()
+    # Fallback: find highest version
+    versions = [d.name for d in model_dir.iterdir() if d.is_dir() and d.name.startswith('v')]
+    if versions:
+        return sorted(versions, key=lambda x: int(x[1:]))[-1]
+    return "v1"
+
+
+def load_model(model_dir: Path, version: str = None):
+    """Load model and vectorizer from versioned directory"""
+    if version is None:
+        version = get_current_version(model_dir)
+    
+    version_dir = model_dir / version
+    print(f"Loading model from: {version_dir}")
+    
+    if not version_dir.exists():
+        raise FileNotFoundError(f"Model directory not found: {version_dir}")
     
     # Load TF-IDF vectorizer
-    tfidf = joblib.load(MODEL_DIR / 'tfidf_vectorizer_v2.pkl')
+    tfidf_path = version_dir / 'tfidf_vectorizer.pkl'
+    if not tfidf_path.exists():
+        # Fallback to old naming
+        tfidf_path = version_dir / f'tfidf_vectorizer_{version}.pkl'
+    tfidf = joblib.load(tfidf_path)
     
-    # Load LightGBM model
-    model = lgb.Booster(model_file=str(MODEL_DIR / 'lgb_model_v2.txt'))
+    # Load LightGBM model (try .bin first, then .txt)
+    model_path = version_dir / 'lgb_model.bin'
+    if not model_path.exists():
+        model_path = version_dir / 'lgb_model.txt'
+    if not model_path.exists():
+        model_path = version_dir / f'lgb_model_{version}.txt'
+    model = lgb.Booster(model_file=str(model_path))
     
     # Load label encoder
-    le = joblib.load(MODEL_DIR / 'label_encoder_v2.pkl')
+    le_path = version_dir / 'label_encoder.pkl'
+    if not le_path.exists():
+        le_path = version_dir / f'label_encoder_{version}.pkl'
+    le = joblib.load(le_path)
     
+    print(f"  Version: {version}")
     print(f"  Classes: {len(le.classes_)}")
     
-    return tfidf, model, le
+    return tfidf, model, le, version
 
 
 def preprocess_text(text: str) -> str:
@@ -97,12 +136,44 @@ def predict_batch(texts: list, tfidf, model, le):
     return predictions
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description='Batch predict Symtomps for empty rows')
+    parser.add_argument('--spreadsheet', '-s', type=str, help='Override spreadsheet name from config')
+    parser.add_argument('--dry-run', '-d', action='store_true', help='Preview without updating sheets')
+    parser.add_argument('--model-version', '-m', type=str, help='Specific model version to use (e.g., v1, v2)')
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    
+    # Load config from .env
+    config = Config.from_env()
+    
+    # Determine spreadsheet name
+    spreadsheet_name = args.spreadsheet or config.google_spreadsheet_name
+    if not spreadsheet_name:
+        print("❌ Error: No spreadsheet name. Set GOOGLE_SPREADSHEET_NAME in .env or use --spreadsheet")
+        sys.exit(1)
+    
+    # Determine credentials file
+    cred_file = config.google_service_account_json
+    if not cred_file.exists():
+        cred_file = PROJECT_ROOT / 'white-set-293710-9cca41a1afd6.json'
+    
+    model_dir = config.model_dir if config.model_dir.exists() else DEFAULT_MODEL_DIR
+    
     print("=" * 70)
     print("BATCH PREDICTION - Update Logs & ML_Tracking")
     print("=" * 70)
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Spreadsheet: {spreadsheet_name}")
+    print(f"Credentials: {cred_file}")
+    print(f"Model dir: {model_dir}")
     print(f"AUTO threshold: >= {AUTO_THRESHOLD * 100:.0f}%")
+    if args.dry_run:
+        print("⚠️  DRY RUN MODE - No changes will be made")
     
     # === 1. Connect to Google Sheets ===
     print("\n1. Connecting to Google Sheets...")
@@ -110,10 +181,10 @@ def main():
         'https://www.googleapis.com/auth/spreadsheets',
         'https://www.googleapis.com/auth/drive'
     ]
-    credentials = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+    credentials = Credentials.from_service_account_file(str(cred_file), scopes=scopes)
     client = gspread.authorize(credentials)
     
-    spreadsheet = client.open(SPREADSHEET_NAME)
+    spreadsheet = client.open(spreadsheet_name)
     logs_ws = spreadsheet.worksheet('Logs')
     
     # Get or create ML_Tracking
@@ -159,7 +230,7 @@ def main():
     
     # === 4. Load model and predict ===
     print("\n3. Loading model...")
-    tfidf, model, le = load_model()
+    tfidf, model, le, model_version = load_model(model_dir, args.model_version)
     
     print("\n4. Predicting...")
     # Combine tech raw text and solving for prediction
@@ -217,47 +288,65 @@ def main():
     # === 7. Update Logs (AUTO predictions) ===
     if logs_updates:
         print(f"\n6. Updating Logs ({len(logs_updates)} rows)...")
-        # Batch update using cell notation
-        # Group by chunks to avoid quota
-        chunk_size = 100
-        for i in range(0, len(logs_updates), chunk_size):
-            chunk = logs_updates[i:i+chunk_size]
-            cells = []
-            for row_num, value in chunk:
-                cells.append({
-                    'range': f'{gspread.utils.rowcol_to_a1(row_num, symtomps_col_idx)}',
-                    'values': [[value]]
-                })
-            logs_ws.batch_update(cells)
-            print(f"    Updated rows {i+1} to {min(i+chunk_size, len(logs_updates))}")
+        if args.dry_run:
+            print("    [DRY RUN] Would update the following rows:")
+            for row_num, value in logs_updates[:10]:
+                print(f"      Row {row_num}: {value}")
+            if len(logs_updates) > 10:
+                print(f"      ... and {len(logs_updates) - 10} more")
+        else:
+            # Batch update using cell notation
+            # Group by chunks to avoid quota
+            chunk_size = 100
+            for i in range(0, len(logs_updates), chunk_size):
+                chunk = logs_updates[i:i+chunk_size]
+                cells = []
+                for row_num, value in chunk:
+                    cells.append({
+                        'range': f'{gspread.utils.rowcol_to_a1(row_num, symtomps_col_idx)}',
+                        'values': [[value]]
+                    })
+                logs_ws.batch_update(cells)
+                print(f"    Updated rows {i+1} to {min(i+chunk_size, len(logs_updates))}")
     
     # === 8. Update ML_Tracking (non-AUTO for review) ===
     if tracking_rows:
         print(f"\n7. Adding to ML_Tracking ({len(tracking_rows)} rows)...")
-        # Get current row count
-        existing = tracking_ws.get_all_values()
-        next_row = len(existing) + 1
-        
-        # Append in chunks
-        chunk_size = 100
-        for i in range(0, len(tracking_rows), chunk_size):
-            chunk = tracking_rows[i:i+chunk_size]
-            tracking_ws.update(f'A{next_row + i}', chunk)
-            print(f"    Added rows {i+1} to {min(i+chunk_size, len(tracking_rows))}")
+        if args.dry_run:
+            print("    [DRY RUN] Would add the following to ML_Tracking:")
+            for row in tracking_rows[:5]:
+                print(f"      {row[4]} ({row[5]}) - {row[6]}")
+            if len(tracking_rows) > 5:
+                print(f"      ... and {len(tracking_rows) - 5} more")
+        else:
+            # Get current row count
+            existing = tracking_ws.get_all_values()
+            next_row = len(existing) + 1
+            
+            # Append in chunks
+            chunk_size = 100
+            for i in range(0, len(tracking_rows), chunk_size):
+                chunk = tracking_rows[i:i+chunk_size]
+                tracking_ws.update(values=chunk, range_name=f'A{next_row + i}')
+                print(f"    Added rows {i+1} to {min(i+chunk_size, len(tracking_rows))}")
     
     # === 9. Summary ===
     print("\n" + "=" * 70)
-    print("✅ BATCH PREDICTION COMPLETE!")
+    if args.dry_run:
+        print("🔍 DRY RUN COMPLETE - No changes made")
+    else:
+        print("✅ BATCH PREDICTION COMPLETE!")
     print("=" * 70)
     print(f"""
 📊 Summary:
    Total predictions: {len(predictions)}
+   Model version: {model_version}
    
    AUTO (>= 90% confidence):
-     → {auto_count} rows inserted to Logs.Symtomps
+     → {auto_count} rows {'would be' if args.dry_run else ''} inserted to Logs.Symtomps
    
    Need Review (< 90% confidence):
-     → {review_count} rows added to ML_Tracking
+     → {review_count} rows {'would be' if args.dry_run else ''} added to ML_Tracking
      
 📋 Status breakdown:
 """)
@@ -270,9 +359,15 @@ def main():
         pct = count / len(predictions) * 100
         print(f"   {status}: {count} ({pct:.1f}%)")
     
-    print(f"""
+    if args.dry_run:
+        print(f"""
+➡️ To apply changes, run without --dry-run:
+   python scripts/batch_predict.py --spreadsheet "{spreadsheet_name}"
+""")
+    else:
+        print(f"""
 ➡️ Next Steps:
-   1. Open Google Sheets: {SPREADSHEET_NAME}
+   1. Open Google Sheets: {spreadsheet_name}
    2. Go to ML_Tracking sheet
    3. Review predictions with status != AUTO
    4. Set review_status to APPROVED or CORRECTED
