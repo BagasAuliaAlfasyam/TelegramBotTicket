@@ -109,8 +109,11 @@ def predict_batch(texts: list, tfidf, model, le):
     
     # Check if tfidf is a dict (word + char)
     if isinstance(tfidf, dict):
-        X_word = tfidf['word'].transform(processed)
-        X_char = tfidf['char'].transform(processed)
+        # Handle different key naming conventions
+        word_key = 'word_tfidf' if 'word_tfidf' in tfidf else 'word'
+        char_key = 'char_tfidf' if 'char_tfidf' in tfidf else 'char'
+        X_word = tfidf[word_key].transform(processed)
+        X_char = tfidf[char_key].transform(processed)
         from scipy.sparse import hstack
         X = hstack([X_word, X_char])
     else:
