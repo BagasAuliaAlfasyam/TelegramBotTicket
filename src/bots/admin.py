@@ -484,7 +484,7 @@ class AdminCommandHandler:
         await update.message.reply_text(
             "🔄 **Starting Retrain Process...**\n\n"
             f"Mode: {'Force' if force else 'Check threshold (≥100 reviewed)'}\n"
-            "This may take 1-3 minutes...",
+            "This may take 10-30 minutes...",
             parse_mode="Markdown"
         )
         
