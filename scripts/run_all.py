@@ -278,10 +278,10 @@ def main() -> None:
     except Exception as e:
         logger.warning("ML Classifier init failed: %s", e)
     
+    # ML Tracking doesn't depend on classifier - it just connects to Google Sheets
     try:
-        if ml_classifier:
-            ml_tracking = MLTrackingClient(config, spreadsheet=sheets_client.spreadsheet)
-            logger.info("ML Tracking initialized")
+        ml_tracking = MLTrackingClient(config, spreadsheet=sheets_client.spreadsheet)
+        logger.info("ML Tracking initialized")
     except Exception as e:
         logger.warning("ML Tracking init failed (continuing without): %s", e)
     
