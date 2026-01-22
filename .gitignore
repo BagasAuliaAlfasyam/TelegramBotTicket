@@ -28,7 +28,8 @@ state_cache.json
 # Legacy backup (migration artifacts)
 legacy_backup/
 
-# Model files (large)
+# Model files (large) - ignore all model artifacts
+models/v*/
 models/*.txt
 models/*.pkl
 models/*.json
