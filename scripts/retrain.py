@@ -292,34 +292,55 @@ class ModelRetrainer:
     
     def load_training_data(self) -> pd.DataFrame:
         """
-        Load training data from ML_Tracking sheet.
+        Load training data from multiple sources:
+        1. Logs sheet - where Symtomps is filled (AUTO predictions + manual labels)
+        2. ML_Tracking sheet - APPROVED/CORRECTED/TRAINED reviews
         
-        ML_Tracking is the single source of truth for training data.
-        It should be synced from Logs sheet using sync_training_data.py
-        
-        Columns expected: tech_message_id, timestamp, tech_raw_text, solving, Symtomps
+        Combines both and deduplicates by tech_message_id.
         """
-        _LOGGER.info("Loading training data from ML_Tracking sheet...")
+        _LOGGER.info("Loading training data...")
         
-        df = None
+        dfs = []
         
-        # Primary: Load from ML_Tracking sheet (single source of truth)
+        # Source 1: Load from Logs (where Symtomps is filled)
         if HAS_GSPREAD:
             try:
-                df = self._load_from_ml_tracking()
-                if df is not None and len(df) > 0:
-                    _LOGGER.info(f"  Loaded from ML_Tracking: {len(df)} rows")
+                df_logs = self._load_from_logs()
+                if df_logs is not None and len(df_logs) > 0:
+                    _LOGGER.info(f"  From Logs (Symtomps filled): {len(df_logs)} rows")
+                    dfs.append(df_logs)
+            except Exception as e:
+                _LOGGER.warning(f"  Could not load from Logs: {e}")
+        
+        # Source 2: Load from ML_Tracking (reviewed data)
+        if HAS_GSPREAD:
+            try:
+                df_tracking = self._load_from_ml_tracking()
+                if df_tracking is not None and len(df_tracking) > 0:
+                    _LOGGER.info(f"  From ML_Tracking (reviewed): {len(df_tracking)} rows")
+                    dfs.append(df_tracking)
             except Exception as e:
                 _LOGGER.warning(f"  Could not load from ML_Tracking: {e}")
         
-        # Fallback: Load from CSV if ML_Tracking failed
-        if df is None or len(df) == 0:
+        # Combine all sources
+        if not dfs:
+            # Fallback: Load from CSV
             if self.master_data_path.exists():
                 _LOGGER.info("  Fallback: Loading from CSV...")
                 df = pd.read_csv(self.master_data_path)
                 _LOGGER.info(f"  Loaded from CSV: {len(df)} rows")
             else:
-                raise ValueError("No training data found! Run sync_training_data.py first.")
+                raise ValueError("No training data found!")
+        else:
+            df = pd.concat(dfs, ignore_index=True)
+            
+            # Deduplicate by tech_message_id (keep last = prefer ML_Tracking corrections)
+            if 'tech_message_id' in df.columns:
+                before_dedup = len(df)
+                df = df.drop_duplicates(subset=['tech_message_id'], keep='last')
+                after_dedup = len(df)
+                if before_dedup != after_dedup:
+                    _LOGGER.info(f"  Deduplicated: {before_dedup} → {after_dedup} rows")
         
         # Normalize columns
         df = self._normalize_dataframe(df)
@@ -327,6 +348,60 @@ class ModelRetrainer:
         _LOGGER.info(f"Total training data: {len(df)} rows, {df['Symtomps'].nunique()} classes")
         
         return df
+    
+    def _load_from_logs(self) -> Optional[pd.DataFrame]:
+        """Load training data from Logs sheet where Symtomps is filled."""
+        if not HAS_GSPREAD:
+            return None
+        
+        scopes = [
+            'https://www.googleapis.com/auth/spreadsheets',
+            'https://www.googleapis.com/auth/drive'
+        ]
+        
+        cred_paths = [
+            self.config.google_service_account_json,
+            PROJECT_ROOT / 'white-set-293710-9cca41a1afd6.json',
+            PROJECT_ROOT / 'service_account.json',
+        ]
+        
+        cred_file = None
+        for path in cred_paths:
+            if path.exists():
+                cred_file = path
+                break
+        
+        if cred_file is None:
+            raise FileNotFoundError("No credentials file found")
+        
+        credentials = Credentials.from_service_account_file(str(cred_file), scopes=scopes)
+        client = gspread.authorize(credentials)
+        
+        spreadsheet_name = self.config.google_spreadsheet_name or 'Log_Tiket_MyTech_ML_Test'
+        spreadsheet = client.open(spreadsheet_name)
+        worksheet = spreadsheet.worksheet("Logs")
+        
+        data = worksheet.get_all_values()
+        if len(data) <= 1:
+            return None
+        
+        df = pd.DataFrame(data[1:], columns=data[0])
+        
+        # Filter: only rows where Symtomps is filled
+        if 'Symtomps' in df.columns:
+            df = df[df['Symtomps'].str.strip() != '']
+            df = df[df['Symtomps'].notna()]
+        
+        # Keep only needed columns
+        cols_to_keep = []
+        for col in ['tech_message_id', 'tech raw text', 'tech_raw_text', 'solving', 'Symtomps']:
+            if col in df.columns:
+                cols_to_keep.append(col)
+        
+        if 'Symtomps' not in cols_to_keep:
+            return None
+        
+        return df[cols_to_keep]
     
     def _load_from_ml_tracking(self) -> Optional[pd.DataFrame]:
         """Load training data from ML_Tracking sheet."""
@@ -379,20 +454,23 @@ class ModelRetrainer:
         
         # ========================================
         # FILTER BY REVIEW STATUS
-        # Only use APPROVED or CORRECTED data for training
+        # Use ALL reviewed data for training (including previously trained)
         # - APPROVED: prediction was correct
         # - CORRECTED: prediction was wrong, label has been fixed
+        # - TRAINED: already used in previous training (but still valid data!)
         # - pending/SKIPPED: not reviewed or ignored
         # ========================================
         if 'review_status' in df.columns:
-            valid_statuses = ['APPROVED', 'CORRECTED']
+            # Include TRAINED because ML models don't have memory
+            # Every retrain needs ALL available data
+            valid_statuses = ['APPROVED', 'CORRECTED', 'TRAINED']
             before_count = len(df)
             df = df[df['review_status'].isin(valid_statuses)]
             after_count = len(df)
-            _LOGGER.info(f"  Filtered by review_status (APPROVED/CORRECTED): {after_count}/{before_count} rows")
+            _LOGGER.info(f"  Filtered by review_status (APPROVED/CORRECTED/TRAINED): {after_count}/{before_count} rows")
             
             if after_count == 0:
-                _LOGGER.warning("  No approved/corrected data found in ML_Tracking!")
+                _LOGGER.warning("  No valid training data found in ML_Tracking!")
                 return None
         else:
             _LOGGER.warning("  review_status column not found - using all data (legacy mode)")
