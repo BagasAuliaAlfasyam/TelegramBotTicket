@@ -1,86 +1,284 @@
-# Telegram Ops Collector Bot
+# TelegramBotMyTech
 
-Bot Telegram yang merekap respon tim Ops untuk pesan teknisi, menyimpan log ke Google Sheets, dan mengunggah lampiran ke S3 kompatibel (MinIO/Wasabi/AWS). Bot ini memakai dua token: satu untuk membaca pesan grup teknisi dan satu lagi untuk mengirim notifikasi/reporting.
+Automated IT Support Ticket Classification Bot for MyTech team.
 
-## Fitur utama
-- Mencatat respon Ops dengan format `solusi, APP -xx` (contoh: `Restart service, MIT -bg`) hanya untuk kode app yang diizinkan (`MIT`, `MIS`).
-- Menandai respon awal/ack jika pesan mengandung kata `oncek`.
-- Menyimpan catatan ke Google Sheets (tanggal, waktu, teks tiket, media type, solver, SLA, dsb).
-- Mengunggah lampiran pesan teknisi ke S3 dan menyimpan URL publik di sheet.
-- Bot reporting mengirim balasan/notifikasi ke grup target.
+## Features
 
-## Arsitektur singkat
-- `main_collecting.py` mem-boot Application Telegram, memuat config, Google Sheets client, dan uploader S3.
-- `collecting_bot.py` meng-handle pesan, parsing format, hitung SLA, upload lampiran, dan tulis ke sheet.
-- `google_sheets_client.py` membungkus gspread untuk append/update baris log.
-- `s3_uploader.py` membungkus boto3 untuk unggah bytes ke bucket publik.
-- `ops_parser.py` validasi format pesan Ops.
-- `debug_chat_id_bot.py` bot kecil untuk mendapatkan `chat_id` grup.
+- 🤖 **ML Classification**: Automatic symptom classification using LightGBM
+- 📊 **Google Sheets Integration**: Auto-logging tickets to spreadsheet
+- 📁 **S3 Media Upload**: Store ticket attachments in S3
+- 📈 **Admin Dashboard**: Telegram commands for monitoring
+- 🔄 **Auto-retrain**: Script for model retraining with new data
 
-## Prasyarat
-- Python 3.10+.
-- Kredensial service account Google Sheets (file JSON).
-- Bucket S3 yang dapat diakses publik (atau endpoint MinIO/Wasabi sejenis).
-- Token Bot Telegram (2 buah: collecting & reporting).
+## Project Structure
 
-## Instalasi cepat
+```
+TelegramBotMyTech/
+├── src/                          # Main source code
+│   ├── __init__.py
+│   ├── core/                     # Core configuration
+│   │   ├── __init__.py
+│   │   └── config.py
+│   ├── ml/                       # ML components
+│   │   ├── __init__.py
+│   │   ├── preprocessing.py      # Domain-aware text preprocessing
+│   │   ├── classifier.py         # ML model wrapper
+│   │   └── tracking.py           # Audit trail & monitoring
+│   ├── bots/                     # Telegram bot handlers
+│   │   ├── __init__.py
+│   │   ├── collector.py          # Ops reply collector
+│   │   ├── admin.py              # Admin command handlers
+│   │   ├── parsers.py            # Message parsing utils
+│   │   └── sla.py                # SLA calculation
+│   └── services/                 # External integrations
+│       ├── __init__.py
+│       ├── sheets.py             # Google Sheets client
+│       └── storage.py            # S3 uploader
+├── scripts/                      # Entry points
+│   ├── run_all.py                # 🌟 Unified: Run both bots in one process
+│   ├── run_collecting.py         # Start collecting bot only
+│   └── run_reporting.py          # Start reporting bot only
+├── models/                       # ML model artifacts
+│   ├── lgb_model_v2.txt
+│   ├── tfidf_vectorizer_v2.pkl
+│   ├── label_encoder_v2.pkl
+│   └── model_metadata_v2.json
+├── .env                          # Environment variables
+├── .env.local                    # Local overrides (gitignored)
+├── requirements.txt
+└── README.md
+```
+
+## Setup
+
+### 1. Install Dependencies
+
 ```bash
 python -m venv .venv
-.venv\Scripts\activate  # PowerShell: .venv\\Scripts\\Activate.ps1
-pip install --upgrade pip
-pip install python-telegram-bot gspread google-auth boto3 python-dotenv
+.venv\Scripts\activate  # Windows
+pip install -r requirements.txt
 ```
-Sesuaikan versi paket jika diperlukan oleh environment Anda.
 
-## Konfigurasi `.env`
-Buat file `.env` di root proyek:
+### 2. Configure Environment
+
+Create `.env` file:
+
+```env
+# Telegram Bot Tokens
+TELEGRAM_BOT_TOKEN=your_collecting_bot_token
+TELEGRAM_BOT_TOKEN_REPORTING=your_reporting_bot_token
+
+# Chat IDs
+OPS_CHAT_ID=123456789
+TECH_CHAT_ID=123456789
+ADMIN_CHAT_ID=123456789
+
+# Google Sheets
+GOOGLE_SERVICE_ACCOUNT_JSON=service_account.json
+GOOGLE_SPREADSHEET_NAME=Log_Tiket_MyTech
+GOOGLE_WORKSHEET_NAME=Logs
+
+# AWS S3
+AWS_ACCESS_KEY_ID=your_key
+AWS_SECRET_ACCESS_KEY=your_secret
+S3_BUCKET_NAME=your_bucket
+S3_REGION=ap-southeast-1
+
+# ML Settings
+MODEL_VERSION=v2
+ML_THRESHOLD_AUTO=0.90
+ML_THRESHOLD_HIGH=0.85
+ML_THRESHOLD_MEDIUM=0.70
+
+# Optional
+ADMIN_USER_IDS=123456789,987654321
+TIMEZONE=Asia/Jakarta
+DEBUG=false
 ```
-TELEGRAM_BOT_TOKEN_COLLECTING=...
-TELEGRAM_BOT_TOKEN_REPORTING=...
 
-GOOGLE_SERVICE_ACCOUNT_JSON=white-set-293710-9cca41a1afd6.json
-GOOGLE_SPREADSHEET_NAME=NamaSpreadsheet
-GOOGLE_WORKSHEET_NAME=NamaWorksheet
+### 3. Setup Google Sheets
 
-TARGET_GROUP_COLLECTING=123456789      # optional, chat_id grup teknisi; kosongkan untuk semua
-TARGET_GROUP_REPORTING=123456789       # optional, kemana notifikasi dikirim
+1. Create a Google Cloud project
+2. Enable Google Sheets API
+3. Create a service account
+4. Download JSON credentials as `service_account.json`
+5. Share the spreadsheet with service account email
 
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_S3_BUCKET=...
-AWS_S3_ENDPOINT=https://your-s3-endpoint
-AWS_S3_PUBLIC_BASE_URL=                # optional, default dibangun dari endpoint + bucket
-AWS_S3_REGION=                         # optional
-AWS_S3_MEDIA_PREFIX=tech-media/        # optional, suffix "/" otomatis ditambahkan
-AWS_S3_SIGNATURE_VERSION=s3            # atau s3v4
-AWS_S3_ADDRESSING_STYLE=virtual        # atau path
-```
-Pastikan path `GOOGLE_SERVICE_ACCOUNT_JSON` mengarah ke file JSON kredensial yang sudah ada.
+## Running
 
-## Cara menjalankan
+### 🌟 Recommended: Run Both Bots Together
+
 ```bash
-.venv\Scripts\activate
-python main_collecting.py
+python scripts/run_all.py
 ```
-Bot akan polling dan memproses pesan text di grup yang dituju.
 
-## Format pesan yang didukung
-- **Ack awal**: balas pesan teknisi dengan teks yang mengandung kata `oncek`. Bot menandai `isOncek=true` dan mencatat waktu respon.
-- **Solusi**: balas pesan teknisi dengan pola `solusi, APP -xx`
-  - `solusi` : teks solusi bebas
-  - `APP` : `MIT` atau `MIS`
-  - `-xx`  : inisial solver (dipetakan ke nama di `collecting_bot.py`)
+This runs **both Collecting and Reporting bots** in a single process.
 
-Media lampiran pada pesan teknisi akan di-upload ke S3 dengan nama file otomatis.
+### Run Individual Bots (for debugging)
 
-## Mendapatkan chat_id grup
-Jika belum tahu `chat_id`, jalankan:
+Collecting Bot only:
 ```bash
-.venv\Scripts\activate
-python debug_chat_id_bot.py
+python scripts/run_collecting.py
 ```
-Invite bot ke grup lalu kirim `/chatid` di grup; bot akan membalas detail `chat_id`.
 
-## Catatan lain
-- Untuk SLA, waktu respon dihitung dari timestamp pesan teknisi ke ack/solusi; batas default 15 menit.
-- Jika ingin menambahkan app baru atau peta inisial->nama solver, edit konstanta di `collecting_bot.py`.
+Reporting Bot only:
+```bash
+python scripts/run_reporting.py
+```
+
+### Retrain Model (Manual Trigger)
+
+Training bisa dilakukan via:
+- **Notebook** (untuk full Optuna tuning) - folder `Analyst/`
+- **Script** (untuk quick retrain) - `scripts/retrain.py`
+
+Lihat section "Retraining Model" di bawah.
+
+## ML Admin Commands
+
+| Command | Description |
+|---------|-------------|
+| `/stats` | Today's prediction statistics |
+| `/report weekly` | Weekly performance report |
+| `/report monthly` | Monthly performance report |
+| `/modelstatus` | Current model information |
+| `/pendingreview` | Items pending manual review |
+| `/retrainstatus` | Check retrain readiness |
+| `/retrain` | **🔥 Retrain + auto-reload (all in Telegram!)** |
+| `/retrain force` | Force retrain tanpa check threshold |
+| `/reloadmodel [v3]` | Hot reload model manual |
+| `/helpml` | Show help message |
+
+## ML Classification Thresholds
+
+| Status | Confidence | Action |
+|--------|------------|--------|
+| AUTO | ≥90% | Auto-applied, trusted |
+| HIGH_REVIEW | 85-90% | High confidence, review recommended |
+| MEDIUM_REVIEW | 70-85% | Medium confidence, review needed |
+| MANUAL | <70% | Manual classification required |
+
+## Retraining Model
+
+Ada **2 cara** untuk retrain model:
+
+### 📓 Option A: Via Notebooks (Recommended for Major Updates)
+
+Full pipeline dengan Optuna hyperparameter tuning.
+
+```
+Analyst/
+├── 01_DataExploration.ipynb    # Data loading & exploration
+├── 02_Preprocessing.ipynb      # Text cleaning & TF-IDF
+├── 03_Training.ipynb           # Model training & optimization
+├── 04_SemiSupervised.ipynb     # Semi-supervised labeling
+├── 05_RelabelKendalaLogin.ipynb # Specific relabeling tasks
+└── 06_UpdateMasterData.ipynb   # Update master dataset
+```
+
+**Workflow:**
+
+1. Jalankan notebook berurutan: `01 → 02 → 03`
+2. Copy artifacts: `Analyst/artifacts/` → `TelegramBotMyTech/models/`
+3. Update `.env`: `MODEL_VERSION=v3`
+4. Restart: `python scripts/run_all.py`
+
+### 🚀 Option B: Via Script (Quick Retrain)
+
+Script untuk quick retrain yang **match pipeline notebook** (word+char TF-IDF, LightGBM, Calibration):
+
+```bash
+# Manual retrain (selalu jalan)
+python scripts/retrain.py
+
+# Check threshold dulu (hanya retrain jika reviewed ≥ 100)
+python scripts/retrain.py --check-threshold 100
+
+# Force retrain (skip check)
+python scripts/retrain.py --force
+
+# Dengan custom master data
+python scripts/retrain.py --master-data ../Analyst/artifacts/training_data.csv
+```
+
+**What retrain.py does:**
+1. Load Master data + Reviewed data dari ML_Tracking sheet
+2. Preprocess dengan ITSupportTextPreprocessor (match notebook)
+3. TF-IDF: Word (1-3 ngram) + Char (3-5 ngram)
+4. Train LightGBM dengan params optimal (from Optuna)
+5. Probability calibration
+6. Save artifacts ke `models/`
+
+**After retrain (pilih salah satu):**
+- 🔥 **Hot Reload** (no restart): `/reloadmodel v3` via Telegram
+- 🔄 **Restart**: Update `.env` → `MODEL_VERSION=v3` → `python scripts/run_all.py`
+
+### Kapan Pakai Apa?
+
+| Scenario | Use |
+|----------|-----|
+| Major update, banyak class baru | Notebook (with Optuna) |
+| Quick retrain, data corrections | Script |
+| Production auto-retrain | Script with `--check-threshold` |
+
+### Kenapa Notebook Tetap Diperlukan?
+
+- ✅ **Optuna tuning**: Script pakai params yang sudah di-tune, notebook bisa re-tune
+- ✅ **Interactive**: Bisa lihat metrics, confusion matrix, per-class F1
+- ✅ **Char n-grams**: Handle typos lebih baik
+- ✅ **Probability calibration**: Lebih akurat confidence scores
+- ✅ **Iterative**: Bisa experiment dan debug
+
+## Architecture
+
+### Text Preprocessing
+
+The preprocessing pipeline is consistent between training and inference:
+
+1. URL removal
+2. Email removal
+3. Phone number removal
+4. WO/SC/Ticket ID normalization
+5. Abbreviation expansion (moban → mohon bantuan, etc.)
+6. IT terms preservation (OTP, TOTP, WO, SC, etc.)
+7. Lowercase conversion
+8. Punctuation removal
+9. Whitespace normalization
+10. [SEP] token merging (Tech text [SEP] Solving text)
+
+### Google Sheets Structure
+
+**Logs (A-T):**
+- Ticket info, technician message, ops response, SLA, Symtomps
+
+**ML_Tracking:**
+- Prediction audit trail for review and retrain
+
+**Monitoring:**
+- Daily aggregated statistics
+
+## Legacy Files
+
+✅ **All legacy files have been removed!** The project now uses clean architecture exclusively.
+
+If you need to reference old code, check `legacy_backup/` folder (not tracked in git).
+
+### Migration Summary
+
+| Old File | New Location |
+|----------|-------------|
+| `main_collecting.py` | `scripts/run_collecting.py` |
+| `main_reporting.py` | `scripts/run_reporting.py` |
+| `collecting_bot.py` | `src/bots/collector.py` |
+| `admin_commands.py` | `src/bots/admin.py` |
+| `ml_classifier.py` | `src/ml/classifier.py` |
+| `ml_tracking.py` | `src/ml/tracking.py` |
+| `google_sheets_client.py` | `src/services/sheets.py` |
+| `s3_uploader.py` | `src/services/storage.py` |
+| `config.py` | `src/core/config.py` |
+| `ops_parser.py` | `src/bots/parsers.py` |
+| `retrain_model.py` | `scripts/retrain.py` |
+
+## License
+
+MIT

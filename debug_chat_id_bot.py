@@ -1,12 +1,20 @@
 import os
+from pathlib import Path
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from dotenv import load_dotenv
 
-load_dotenv()  # baca .env
+# Load .env.local kalau ada, otherwise .env
+env_local = Path(__file__).parent / ".env.local"
+if env_local.exists():
+    load_dotenv(env_local)
+    print("✅ Loaded from .env.local")
+else:
+    load_dotenv()
+    print("⚠️ Loaded from .env (production)")
 
 # Pilih mau pakai bot yang mana:
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_REPORTING")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_COLLECTING")
 # atau untuk reporting:
 # TOKEN = os.getenv("TELEGRAM_BOT_TOKEN_REPORTING")
 

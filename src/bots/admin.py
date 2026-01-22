@@ -1,0 +1,709 @@
+"""
+Admin Command Handlers
+=======================
+Telegram admin commands for ML monitoring and management.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime
+from typing import Optional, TYPE_CHECKING
+from zoneinfo import ZoneInfo
+
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+if TYPE_CHECKING:
+    from src.core.config import Config
+    from src.ml.classifier import MLClassifier
+    from src.ml.tracking import MLTrackingClient
+    from src.services.sheets import GoogleSheetsClient
+
+_LOGGER = logging.getLogger(__name__)
+
+# Timezone
+TZ = ZoneInfo("Asia/Jakarta")
+
+
+class AdminCommandHandler:
+    """Handler for admin commands related to ML monitoring."""
+    
+    def __init__(
+        self,
+        config: "Config",
+        ml_classifier: Optional["MLClassifier"] = None,
+        ml_tracking: Optional["MLTrackingClient"] = None,
+        admin_chat_ids: Optional[list[int]] = None,
+    ):
+        self._config = config
+        self._ml_classifier = ml_classifier
+        self._ml_tracking = ml_tracking
+        self._admin_chat_ids = admin_chat_ids or []
+        
+    def _is_admin(self, user_id: int) -> bool:
+        """Check if user is an admin."""
+        if not self._admin_chat_ids:
+            return True  # If no admin list, allow all
+        return user_id in self._admin_chat_ids
+    
+    async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /stats - Show today's ML prediction statistics
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        if not self._ml_tracking:
+            await update.message.reply_text("❌ ML Tracking not initialized")
+            return
+            
+        try:
+            stats = self._ml_tracking.get_today_stats()
+            pending = self._ml_tracking.get_pending_review_count()
+            
+            if not stats:
+                await update.message.reply_text(
+                    "📊 **Today's ML Stats**\n\n"
+                    "No predictions recorded today yet.",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            total = stats.get("total_predictions", 0)
+            auto_count = stats.get("auto_count", 0)
+            high_count = stats.get("high_count", 0)
+            medium_count = stats.get("medium_count", 0)
+            manual_count = stats.get("manual_count", 0)
+            avg_conf = stats.get("avg_confidence", 0)
+            reviewed = stats.get("reviewed_count", 0)
+            
+            # Calculate percentages
+            auto_pct = (auto_count / total * 100) if total > 0 else 0
+            
+            message = (
+                f"📊 **Today's ML Stats** ({datetime.now(TZ).strftime('%d %b %Y')})\n\n"
+                f"📈 **Total Predictions:** {total}\n"
+                f"🎯 **Avg Confidence:** {avg_conf:.1f}%\n\n"
+                f"**Distribution:**\n"
+                f"  ✅ AUTO (≥90%): {auto_count} ({auto_pct:.1f}%)\n"
+                f"  🔶 HIGH REVIEW: {high_count}\n"
+                f"  🟡 MEDIUM REVIEW: {medium_count}\n"
+                f"  🔴 MANUAL: {manual_count}\n\n"
+                f"**Review Status:**\n"
+                f"  📋 Pending Review: {pending.get('total_pending', 0)}\n"
+                f"  ✅ Reviewed Today: {reviewed}\n"
+            )
+            
+            if self._ml_classifier:
+                message += f"\n🤖 Model: {self._ml_classifier.model_version}"
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            
+        except Exception as e:
+            _LOGGER.error("Error getting stats: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    async def report(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /report [weekly|monthly] - Generate ML performance report
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        if not self._ml_tracking:
+            await update.message.reply_text("❌ ML Tracking not initialized")
+            return
+        
+        # Parse period argument
+        args = context.args or []
+        period = args[0].lower() if args else "weekly"
+        
+        if period not in ["weekly", "monthly"]:
+            await update.message.reply_text(
+                "Usage: /report [weekly|monthly]\n"
+                "Example: /report weekly"
+            )
+            return
+            
+        try:
+            if period == "weekly":
+                stats = self._ml_tracking.get_weekly_stats()
+                period_label = "7 Hari Terakhir"
+            else:
+                stats = self._ml_tracking.get_monthly_stats()
+                period_label = "30 Hari Terakhir"
+            
+            if not stats or stats.get("total_predictions", 0) == 0:
+                await update.message.reply_text(
+                    f"📊 **{period.title()} Report**\n\n"
+                    f"No data available for {period_label}.",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            total = stats.get("total_predictions", 0)
+            avg_conf = stats.get("avg_confidence", 0)
+            auto_count = stats.get("auto_count", 0)
+            high_count = stats.get("high_review_count", 0)
+            medium_count = stats.get("medium_review_count", 0)
+            manual_count = stats.get("manual_count", 0)
+            reviewed = stats.get("reviewed_count", 0)
+            accuracy = stats.get("accuracy", 0)
+            
+            auto_pct = (auto_count / total * 100) if total > 0 else 0
+            review_rate = ((high_count + medium_count + manual_count) / total * 100) if total > 0 else 0
+            
+            message = (
+                f"📊 **{period.title()} Report - {period_label}**\n"
+                f"Generated: {datetime.now(TZ).strftime('%d %b %Y %H:%M')}\n\n"
+                f"**Summary:**\n"
+                f"  📈 Total Predictions: {total}\n"
+                f"  🎯 Avg Confidence: {avg_conf:.1f}%\n"
+                f"  ⚡ Automation Rate: {auto_pct:.1f}%\n"
+                f"  📋 Review Rate: {review_rate:.1f}%\n\n"
+                f"**Distribution:**\n"
+                f"  ✅ AUTO: {auto_count}\n"
+                f"  🔶 HIGH REVIEW: {high_count}\n"
+                f"  🟡 MEDIUM REVIEW: {medium_count}\n"
+                f"  🔴 MANUAL: {manual_count}\n\n"
+                f"**Quality Metrics:**\n"
+                f"  📝 Total Reviewed: {reviewed}\n"
+                f"  ✅ Accuracy (reviewed): {accuracy:.1f}%\n"
+            )
+            
+            if self._ml_classifier:
+                message += f"\n🤖 Model: {self._ml_classifier.model_version} ({self._ml_classifier.num_classes} classes)"
+            
+            # Add trend analysis
+            trend_msg = self._analyze_trend(stats)
+            if trend_msg:
+                message += f"\n\n**📈 Trend Analysis:**\n{trend_msg}"
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            
+        except Exception as e:
+            _LOGGER.error("Error generating report: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    def _analyze_trend(self, stats: dict) -> str:
+        """Analyze trends and generate insights."""
+        insights = []
+        
+        total = stats.get("total_predictions", 0)
+        auto_count = stats.get("auto_count", 0)
+        avg_conf = stats.get("avg_confidence", 0)
+        manual_count = stats.get("manual_count", 0)
+        
+        if total == 0:
+            return ""
+        
+        auto_rate = (auto_count / total * 100)
+        manual_rate = (manual_count / total * 100)
+        
+        # Check automation rate
+        if auto_rate >= 90:
+            insights.append("✅ Excellent automation rate (≥90%)")
+        elif auto_rate >= 80:
+            insights.append("👍 Good automation rate (80-90%)")
+        elif auto_rate < 70:
+            insights.append("⚠️ Low automation rate (<70%), consider retraining")
+        
+        # Check confidence
+        if avg_conf >= 90:
+            insights.append("✅ High average confidence")
+        elif avg_conf < 80:
+            insights.append("⚠️ Average confidence dropping, monitor closely")
+        
+        # Check manual rate
+        if manual_rate > 20:
+            insights.append("🔴 High manual classification rate (>20%)")
+        
+        return "\n".join(insights) if insights else "No significant trends detected."
+    
+    async def model_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /modelstatus - Show current model information
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        if not self._ml_classifier:
+            await update.message.reply_text("❌ ML Classifier not initialized")
+            return
+            
+        try:
+            metadata = self._ml_classifier.get_metadata()
+            
+            message = (
+                f"🤖 **Model Status**\n\n"
+                f"**Version:** {metadata.get('version', 'unknown')}\n"
+                f"**Classes:** {metadata.get('num_classes', 0)}\n"
+                f"**Training Samples:** {metadata.get('training_samples', 'N/A')}\n"
+                f"**Training Accuracy:** {metadata.get('training_accuracy', 0):.2f}%\n"
+                f"**Trained At:** {metadata.get('trained_at', 'N/A')}\n\n"
+                f"**Thresholds:**\n"
+                f"  AUTO: ≥{metadata.get('threshold_auto', 0.90)*100:.0f}%\n"
+                f"  HIGH REVIEW: {metadata.get('threshold_high', 0.85)*100:.0f}%-{metadata.get('threshold_auto', 0.90)*100:.0f}%\n"
+                f"  MEDIUM REVIEW: {metadata.get('threshold_medium', 0.70)*100:.0f}%-{metadata.get('threshold_high', 0.85)*100:.0f}%\n"
+                f"  MANUAL: <{metadata.get('threshold_medium', 0.70)*100:.0f}%\n"
+            )
+            
+            # Add class list (top 10)
+            classes = metadata.get("classes", [])
+            if classes:
+                message += f"\n**Sample Classes ({len(classes)} total):**\n"
+                message += ", ".join(classes[:5]) + "..."
+                
+            await update.message.reply_text(message, parse_mode="Markdown")
+            
+        except Exception as e:
+            _LOGGER.error("Error getting model status: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    async def pending_review(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /pendingreview - Show items pending manual review
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        if not self._ml_tracking:
+            await update.message.reply_text("❌ ML Tracking not initialized")
+            return
+            
+        try:
+            pending = self._ml_tracking.get_pending_review_count()
+            
+            total_pending = pending.get("total_pending", 0)
+            manual = pending.get("manual_pending", 0)
+            high = pending.get("high_review_pending", 0)
+            medium = pending.get("medium_review_pending", 0)
+            
+            if total_pending == 0:
+                await update.message.reply_text(
+                    "📋 **Pending Review**\n\n"
+                    "✅ No items pending review!",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            message = (
+                f"📋 **Pending Review**\n\n"
+                f"**Total Pending:** {total_pending}\n\n"
+                f"By Priority:\n"
+                f"  🔴 MANUAL (Critical): {manual}\n"
+                f"  🔶 HIGH REVIEW: {high}\n"
+                f"  🟡 MEDIUM REVIEW: {medium}\n\n"
+                f"Use Google Sheets to review and correct predictions."
+            )
+            
+            await update.message.reply_text(message, parse_mode="Markdown")
+            
+        except Exception as e:
+            _LOGGER.error("Error getting pending review: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    async def help_admin(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /helpml - Show available ML admin commands
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        message = (
+            "🤖 **Daftar Command Admin ML**\n\n"
+            
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "📊 **MONITORING**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            "**/stats**\n"
+            "└ Lihat statistik prediksi hari ini\n"
+            "└ (total, accuracy, automation rate)\n\n"
+            
+            "**/report**\n"
+            "└ Laporan performa model\n"
+            "└ Contoh: `/report weekly` atau `/report monthly`\n\n"
+            
+            "**/modelstatus**\n"
+            "└ Info model yang aktif\n"
+            "└ (versi, jumlah class, threshold)\n\n"
+            
+            "**/pendingreview**\n"
+            "└ Lihat tiket yang butuh review manual\n\n"
+            
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔄 **RETRAINING**\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            "**/retrainstatus**\n"
+            "└ Cek apakah data cukup untuk retrain\n"
+            "└ (minimal 100 data reviewed)\n\n"
+            
+            "**/retrain**\n"
+            "└ Retrain model jika threshold tercapai\n"
+            "└ Model langsung aktif tanpa restart!\n\n"
+            
+            "**/retrain force**\n"
+            "└ Paksa retrain tanpa cek threshold\n\n"
+            
+            "**/reloadmodel**\n"
+            "└ Load ulang model tanpa restart\n"
+            "└ Contoh: `/reloadmodel v2` untuk versi spesifik\n\n"
+            
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "**/help** atau **/helpml**\n"
+            "└ Tampilkan pesan bantuan ini"
+        )
+        
+        await update.message.reply_text(message, parse_mode="Markdown")
+    
+    async def retrain_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /retrainstatus - Check if there's enough data for retraining
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        if not self._ml_tracking:
+            await update.message.reply_text("❌ ML Tracking not initialized")
+            return
+        
+        try:
+            # Get reviewed count from ML_Tracking
+            reviewed_count = self._ml_tracking.get_reviewed_count()
+            auto_count = self._ml_tracking.get_auto_count()
+            total_available = reviewed_count + auto_count
+            
+            min_samples = 100  # Minimum for retraining
+            ready = total_available >= min_samples
+            
+            if self._ml_classifier:
+                current_version = self._ml_classifier.model_version
+                current_samples = self._ml_classifier.get_metadata().get("training_samples", "N/A")
+            else:
+                current_version = "N/A"
+                current_samples = "N/A"
+            
+            status_emoji = "✅" if ready else "⏳"
+            
+            message = (
+                f"🔄 **Retrain Status**\n\n"
+                f"**Current Model:** {current_version}\n"
+                f"**Training Samples:** {current_samples}\n\n"
+                f"**New Data Available:**\n"
+                f"  📝 Reviewed: {reviewed_count}\n"
+                f"  ✅ AUTO (trusted): {auto_count}\n"
+                f"  📊 Total: {total_available}\n\n"
+                f"**Status:** {status_emoji} {'Ready for retrain!' if ready else f'Need {min_samples - total_available} more samples'}\n\n"
+            )
+            
+            if ready:
+                message += (
+                    "To retrain, run on server:\n"
+                    "`python -m scripts.retrain`"
+                )
+            
+            await update.message.reply_text(message, parse_mode="Markdown")
+            
+        except Exception as e:
+            _LOGGER.error("Error checking retrain status: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    async def reload_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /reloadmodel [version] - Hot reload ML model without restarting bot
+        
+        Example:
+            /reloadmodel       - Reload current version
+            /reloadmodel v3    - Load version v3
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+            
+        if not self._ml_classifier:
+            await update.message.reply_text("❌ ML Classifier not initialized")
+            return
+        
+        # Parse version argument
+        args = context.args or []
+        new_version = args[0] if args else None
+        
+        old_version = self._ml_classifier.model_version
+        target_version = new_version or old_version
+        
+        await update.message.reply_text(
+            f"🔄 Reloading model...\n"
+            f"Current: {old_version}\n"
+            f"Target: {target_version}"
+        )
+        
+        try:
+            success = self._ml_classifier.reload(new_version)
+            
+            if success:
+                new_info = self._ml_classifier.get_metadata()
+                await update.message.reply_text(
+                    f"✅ **Model Reloaded Successfully!**\n\n"
+                    f"**Version:** {new_info.get('version', 'unknown')}\n"
+                    f"**Classes:** {new_info.get('num_classes', 0)}\n"
+                    f"**Previous:** {old_version}\n\n"
+                    f"Bot is now using the new model. No restart needed! 🎉",
+                    parse_mode="Markdown"
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ **Model Reload Failed!**\n\n"
+                    f"Could not load model version: {target_version}\n"
+                    f"Check if model files exist in models/ folder.\n\n"
+                    f"Bot is still using: {old_version}",
+                    parse_mode="Markdown"
+                )
+                
+        except Exception as e:
+            _LOGGER.error("Error reloading model: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    async def retrain(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /retrain [--force] - Retrain model dan auto-reload
+        
+        Example:
+            /retrain        - Retrain jika threshold tercapai (reviewed >= 100)
+            /retrain force  - Force retrain tanpa check threshold
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+        
+        # Parse args
+        args = context.args or []
+        force = "force" in [a.lower() for a in args]
+        
+        await update.message.reply_text(
+            "🔄 **Starting Retrain Process...**\n\n"
+            f"Mode: {'Force' if force else 'Check threshold (≥100 reviewed)'}\n"
+            "This may take 1-3 minutes...",
+            parse_mode="Markdown"
+        )
+        
+        try:
+            import asyncio
+            import subprocess
+            import sys
+            from pathlib import Path
+            
+            # Get script path
+            script_path = Path(__file__).parent.parent.parent / "scripts" / "retrain.py"
+            
+            if not script_path.exists():
+                await update.message.reply_text(f"❌ Retrain script not found: {script_path}")
+                return
+            
+            # Build command
+            cmd = [sys.executable, str(script_path)]
+            if force:
+                cmd.append("--force")
+            else:
+                cmd.extend(["--check-threshold", "100"])
+            
+            # Run in background thread to not block
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300  # 5 minute timeout
+                )
+            )
+            
+            # Check result
+            if result.returncode == 0:
+                # Parse output for version
+                output = result.stdout
+                
+                # Check if actually retrained or skipped
+                if "skipping retrain" in output.lower():
+                    await update.message.reply_text(
+                        "⏳ **Retrain Skipped**\n\n"
+                        "Threshold not reached yet.\n"
+                        "Use `/retrain force` to force retrain.",
+                        parse_mode="Markdown"
+                    )
+                    return
+                
+                # Extract new version from output
+                import re
+                version_match = re.search(r'New model: (v\d+)', output)
+                new_version = version_match.group(1) if version_match else None
+                
+                # Extract metrics
+                f1_match = re.search(r'Macro F1: ([\d.]+)', output)
+                f1_score = f1_match.group(1) if f1_match else "N/A"
+                
+                classes_match = re.search(r'Classes: (\d+)', output)
+                n_classes = classes_match.group(1) if classes_match else "N/A"
+                
+                await update.message.reply_text(
+                    f"✅ **Retrain Complete!**\n\n"
+                    f"📦 Version: {new_version or 'unknown'}\n"
+                    f"📊 Classes: {n_classes}\n"
+                    f"📈 Macro F1: {f1_score}\n\n"
+                    f"🔄 Auto-reloading model...",
+                    parse_mode="Markdown"
+                )
+                
+                # Auto reload the new model
+                if new_version and self._ml_classifier:
+                    success = self._ml_classifier.reload(new_version)
+                    if success:
+                        await update.message.reply_text(
+                            f"🎉 **Model Active!**\n\n"
+                            f"Bot is now using {new_version}.\n"
+                            f"No restart needed!",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await update.message.reply_text(
+                            f"⚠️ Retrain succeeded but reload failed.\n"
+                            f"Use `/reloadmodel {new_version}` manually.",
+                            parse_mode="Markdown"
+                        )
+                else:
+                    await update.message.reply_text(
+                        "⚠️ Retrain succeeded!\n"
+                        "Use `/reloadmodel` to load the new model.",
+                        parse_mode="Markdown"
+                    )
+            else:
+                # Error
+                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+                await update.message.reply_text(
+                    f"❌ **Retrain Failed**\n\n"
+                    f"```\n{error_msg}\n```",
+                    parse_mode="Markdown"
+                )
+                
+        except subprocess.TimeoutExpired:
+            await update.message.reply_text(
+                "❌ **Retrain Timeout**\n\n"
+                "Process took longer than 5 minutes.\n"
+                "Try running manually on server.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            _LOGGER.exception("Error during retrain: %s", e)
+            await update.message.reply_text(f"❌ Error: {e}")
+
+
+class TrendAlertService:
+    """Background service for trend analysis and auto-alerts."""
+    
+    def __init__(
+        self,
+        ml_tracking: "MLTrackingClient",
+        alert_chat_id: Optional[int] = None,
+    ):
+        self._ml_tracking = ml_tracking
+        self._alert_chat_id = alert_chat_id
+        self._last_alert_date = None
+    
+    def check_and_alert(self) -> Optional[str]:
+        """
+        Check for concerning trends and generate alert message if needed.
+        Returns alert message if there's something to alert, None otherwise.
+        """
+        try:
+            stats = self._ml_tracking.get_weekly_stats()
+            if not stats or stats.get("total_predictions", 0) < 10:
+                return None
+            
+            alerts = []
+            total = stats.get("total_predictions", 0)
+            auto_count = stats.get("auto_count", 0)
+            manual_count = stats.get("manual_count", 0)
+            avg_conf = stats.get("avg_confidence", 0)
+            
+            auto_rate = (auto_count / total * 100) if total > 0 else 0
+            manual_rate = (manual_count / total * 100) if total > 0 else 0
+            
+            # Check for concerning patterns
+            if auto_rate < 70:
+                alerts.append(f"⚠️ Low automation rate: {auto_rate:.1f}% (target: ≥80%)")
+            
+            if manual_rate > 25:
+                alerts.append(f"🔴 High manual classification: {manual_rate:.1f}% (target: <15%)")
+            
+            if avg_conf < 80:
+                alerts.append(f"⚠️ Declining confidence: {avg_conf:.1f}% (target: ≥85%)")
+            
+            # Check pending review queue
+            pending = self._ml_tracking.get_pending_review_count()
+            total_pending = pending.get("total_pending", 0)
+            if total_pending > 50:
+                alerts.append(f"📋 Large review queue: {total_pending} items pending")
+            
+            if not alerts:
+                return None
+            
+            message = (
+                "🚨 **ML Model Alert**\n\n"
+                + "\n".join(alerts)
+                + f"\n\nLast 7 days: {total} predictions"
+                + "\n\nConsider reviewing and retraining the model."
+            )
+            
+            return message
+            
+        except Exception as e:
+            _LOGGER.error("Error checking trends: %s", e)
+            return None
+
+
+def build_reporting_application(
+    config: "Config",
+    sheets_client: "GoogleSheetsClient",
+    ml_classifier: Optional["MLClassifier"] = None,
+    ml_tracking: Optional["MLTrackingClient"] = None,
+):
+    """
+    Build the reporting/admin bot Application.
+    
+    Args:
+        config: Application configuration
+        sheets_client: Google Sheets client (shared)
+        ml_classifier: Optional ML classifier for status
+        ml_tracking: Optional ML tracking client
+        
+    Returns:
+        Configured Application instance
+    """
+    from telegram.ext import Application
+    
+    # Admin command handler
+    admin_handler = AdminCommandHandler(
+        config=config,
+        ml_classifier=ml_classifier,
+        ml_tracking=ml_tracking,
+        admin_chat_ids=None,  # Allow all for now
+    )
+    
+    # Build application
+    application = ApplicationBuilder().token(config.telegram_reporting_bot_token).build()
+    
+    # Register admin commands
+    application.add_handler(CommandHandler("stats", admin_handler.stats))
+    application.add_handler(CommandHandler("report", admin_handler.report))
+    application.add_handler(CommandHandler("modelstatus", admin_handler.model_status))
+    application.add_handler(CommandHandler("pendingreview", admin_handler.pending_review))
+    application.add_handler(CommandHandler("retrainstatus", admin_handler.retrain_status))
+    application.add_handler(CommandHandler("retrain", admin_handler.retrain))
+    application.add_handler(CommandHandler("reloadmodel", admin_handler.reload_model))
+    application.add_handler(CommandHandler("helpml", admin_handler.help_admin))
+    application.add_handler(CommandHandler("help", admin_handler.help_admin))
+    
+    _LOGGER.info("Reporting bot application built with %d handlers", 
+                len(application.handlers.get(0, [])))
+    
+    return application
