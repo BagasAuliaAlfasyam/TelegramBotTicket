@@ -590,20 +590,10 @@ class AdminCommandHandler:
                         elif "SUCCESS" in line_text or "Complete" in line_text:
                             current_status = "✅ Complete!"
             
-            # Wait for process with timeout
-            try:
-                await asyncio.wait_for(read_output(), timeout=1800)
-                await process.wait()
-                progress_task.cancel()
-            except asyncio.TimeoutError:
-                progress_task.cancel()
-                process.kill()
-                await progress_msg.edit_text(
-                    "❌ **Retrain Timeout**\n\n"
-                    "Process took longer than 30 minutes.",
-                    parse_mode="Markdown"
-                )
-                return
+            # Wait for process to complete (no timeout)
+            await read_output()
+            await process.wait()
+            progress_task.cancel()
             
             # Get full output
             output = "\n".join(output_lines)
@@ -679,21 +669,14 @@ class AdminCommandHandler:
                         parse_mode="Markdown"
                     )
             else:
-                # Error
-                error_msg = result.stderr[:500] if result.stderr else "Unknown error"
+                # Error - get last few lines as error message
+                error_msg = "\n".join(output_lines[-10:]) if output_lines else "Unknown error"
                 await update.message.reply_text(
                     f"❌ **Retrain Failed**\n\n"
-                    f"```\n{error_msg}\n```",
+                    f"```\n{error_msg[:500]}\n```",
                     parse_mode="Markdown"
                 )
                 
-        except asyncio.TimeoutError:
-            await update.message.reply_text(
-                "❌ **Retrain Timeout**\n\n"
-                "Process took longer than 30 minutes.\n"
-                "Try running manually on server.",
-                parse_mode="Markdown"
-            )
         except Exception as e:
             _LOGGER.exception("Error during retrain: %s", e)
             await update.message.reply_text(f"❌ Error: {e}")
