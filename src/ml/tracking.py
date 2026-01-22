@@ -370,30 +370,46 @@ class MLTrackingClient:
             return 0
     
     def get_trained_count(self) -> int:
-        """Get count of already trained data (TRAINED status)."""
-        if not self._tracking_sheet:
-            return 0
+        """
+        Get count of already trained data.
         
+        Includes:
+        - ML_Tracking rows with TRAINED status
+        - Logs rows where Symtomps is filled (historical training data)
+        """
+        count = 0
+        
+        # Count TRAINED from ML_Tracking
+        if self._tracking_sheet:
+            try:
+                all_data = self._tracking_sheet.get_all_values()
+                if len(all_data) > 1:
+                    headers = all_data[0]
+                    review_col = headers.index("review_status") if "review_status" in headers else -1
+                    if review_col != -1:
+                        count += sum(
+                            1 for row in all_data[1:] 
+                            if len(row) > review_col and row[review_col] == "TRAINED"
+                        )
+            except (GSpreadException, APIError) as exc:
+                _LOGGER.exception("Failed to get trained count from ML_Tracking: %s", exc)
+        
+        # Count from Logs where Symtomps is filled (historical training data)
         try:
-            all_data = self._tracking_sheet.get_all_values()
-            if len(all_data) <= 1:
-                return 0
-            
-            # Find review_status column from header
-            headers = all_data[0]
-            review_col = headers.index("review_status") if "review_status" in headers else -1
-            if review_col == -1:
-                return 0
-            
-            count = sum(
-                1 for row in all_data[1:] 
-                if len(row) > review_col and row[review_col] == "TRAINED"
-            )
-            return count
-            
-        except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to get trained count: %s", exc)
-            return 0
+            logs_sheet = self._spreadsheet.worksheet("Logs")
+            logs_data = logs_sheet.get_all_values()
+            if len(logs_data) > 1:
+                headers = logs_data[0]
+                symtomps_col = headers.index("Symtomps") if "Symtomps" in headers else -1
+                if symtomps_col != -1:
+                    count += sum(
+                        1 for row in logs_data[1:]
+                        if len(row) > symtomps_col and row[symtomps_col].strip() != ''
+                    )
+        except (GSpreadException, APIError, gspread.WorksheetNotFound) as exc:
+            _LOGGER.warning("Could not count from Logs sheet: %s", exc)
+        
+        return count
     
     def mark_as_trained(self, row_indices: list[int] = None) -> int:
         """
