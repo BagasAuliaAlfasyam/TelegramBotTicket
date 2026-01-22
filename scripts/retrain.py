@@ -478,14 +478,15 @@ class ModelRetrainer:
         # Rename columns to match expected format
         column_mapping = {
             'tech_raw_text': 'tech raw text',
+            'reviewed_symtomps': 'Symtomps',  # ML_Tracking uses reviewed_symtomps
         }
         for old_name, new_name in column_mapping.items():
             if old_name in df.columns:
                 df = df.rename(columns={old_name: new_name})
         
-        # Select only training columns
+        # Select only training columns (include tech_message_id for deduplication)
         training_cols = []
-        for col in ['tech raw text', 'tech_raw_text', 'solving', 'Symtomps']:
+        for col in ['tech_message_id', 'tech raw text', 'tech_raw_text', 'solving', 'Symtomps']:
             if col in df.columns:
                 training_cols.append(col)
         
