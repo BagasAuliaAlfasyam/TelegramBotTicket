@@ -52,12 +52,13 @@ class MLTrackingClient:
                 self._spreadsheet = client.open(self._config.google_spreadsheet_name)
             
             # Get or create ML_Tracking sheet
+            # Headers match existing sheet structure for training data
             self._tracking_sheet = self._get_or_create_sheet(
                 ML_TRACKING_SHEET,
                 headers=[
                     "tech_message_id", "timestamp", "tech_raw_text", "solving",
-                    "predicted_symtomps", "ml_confidence", "prediction_status",
-                    "reviewed_symtomps", "review_status", "inference_time_ms"
+                    "Symtomps", "sync_date", "source", "ml_confidence", 
+                    "prediction_status", "review_status", "logs_row_number"
                 ]
             )
             
@@ -119,17 +120,19 @@ class MLTrackingClient:
             return
         
         try:
+            now = datetime.now(self._tz)
             row = [
-                str(tech_message_id),
-                datetime.now(self._tz).isoformat(),
-                tech_raw_text[:500] if tech_raw_text else "",  # Truncate for sheet limits
-                solving[:500] if solving else "",
-                prediction_result.predicted_symtomps,
-                prediction_result.ml_confidence,
-                prediction_result.prediction_status,
-                "",  # reviewed_symtomps - to be filled manually
-                "pending",  # review_status
-                prediction_result.inference_time_ms,
+                str(tech_message_id),                              # tech_message_id
+                now.isoformat(),                                    # timestamp
+                tech_raw_text[:500] if tech_raw_text else "",       # tech_raw_text
+                solving[:500] if solving else "",                   # solving
+                prediction_result.predicted_symtomps,               # Symtomps (predicted)
+                now.strftime("%Y-%m-%d"),                           # sync_date
+                "realtime",                                         # source (realtime vs batch)
+                prediction_result.ml_confidence,                    # ml_confidence
+                prediction_result.prediction_status,                # prediction_status
+                "pending",                                          # review_status
+                "",                                                 # logs_row_number (optional)
             ]
             
             self._tracking_sheet.append_row(row, value_input_option='RAW')
