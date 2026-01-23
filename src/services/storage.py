@@ -28,11 +28,28 @@ class S3Uploader:
         public_base_url: str = None,
         media_prefix: str = "",
         endpoint_url: str = None,
-        addressing_style: str = "virtual",
+        addressing_style: str = "path",  # "path" for MinIO compatibility
         signature_version: str = "s3v4",
     ) -> None:
         self._bucket = bucket or config.s3_bucket_name
-        self._public_base_url = (public_base_url or f"https://{self._bucket}.s3.amazonaws.com").rstrip("/")
+        
+        # Determine endpoint and public URL
+        _endpoint = endpoint_url or config.s3_endpoint_url or None
+        
+        # For MinIO/custom S3, use path-style addressing
+        if _endpoint:
+            addressing_style = "path"
+        
+        # Public URL for accessing files
+        if public_base_url:
+            self._public_base_url = public_base_url.rstrip("/")
+        elif config.s3_public_url:
+            self._public_base_url = config.s3_public_url.rstrip("/")
+        elif _endpoint:
+            self._public_base_url = f"{_endpoint.rstrip('/')}/{self._bucket}"
+        else:
+            self._public_base_url = f"https://{self._bucket}.s3.amazonaws.com"
+        
         self._media_prefix = media_prefix
 
         s3_config = {"addressing_style": addressing_style}
@@ -49,7 +66,7 @@ class S3Uploader:
             "s3",
             aws_access_key_id=config.aws_access_key_id,
             aws_secret_access_key=config.aws_secret_access_key,
-            endpoint_url=endpoint_url,
+            endpoint_url=_endpoint,
             region_name=config.s3_region,
             config=boto_config,
         )
