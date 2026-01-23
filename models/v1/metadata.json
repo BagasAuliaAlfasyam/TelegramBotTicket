@@ -1,0 +1,63 @@
+{
+  "version": "v1",
+  "created_at": "2026-01-23T01:41:41.339136",
+  "classes": [
+    "CEK ORDER UTONLINE",
+    "INFORMASI LINK APK",
+    "KENDALA ASSIGNMENT MIA",
+    "KENDALA COMPWA",
+    "KENDALA DATA BAI",
+    "KENDALA DATA TEKNISI",
+    "KENDALA EVIDENCE BAI",
+    "KENDALA INTEGRASI ALISTA",
+    "KENDALA INTEGRASI BIMA",
+    "KENDALA INTEGRASI EAI/APIM",
+    "KENDALA INTEGRASI IBOOSTER",
+    "KENDALA INTEGRASI UT ONLINE",
+    "KENDALA INTEGRASI VALINS",
+    "KENDALA LOGIN",
+    "KENDALA LUPA PASSWORD",
+    "KENDALA ONT/NTE",
+    "KENDALA REJECT BAI",
+    "KENDALA REOPEN BAI",
+    "KENDALA REQUEST FAILED",
+    "KENDALA RETURN BAI",
+    "KENDALA SPEEDTEST",
+    "KENDALA SUBMIT BAI",
+    "KENDALA UPDATE BAI",
+    "KENDALA UPDATE SUBTASK",
+    "KENDALA USERNAME AND PASSWORD MISMATCH",
+    "KENDALA VERIFIKASI",
+    "KOORDINASI DENGAN APLIKASI LAIN",
+    "MENGARAHKAN KE IT TA",
+    "TICKET APLIKASI LAIN",
+    "TWO FACTOR AUTHETICATION",
+    "UPDATE VERSION TEKNISI",
+    "USER AUTH DEVID REQUIRED",
+    "USER AUTH FAILED",
+    "USER AUTH LOCKED",
+    "USER NOT FOUND"
+  ],
+  "n_classes": 35,
+  "features": {
+    "word_tfidf": 10000,
+    "char_tfidf": 5000
+  },
+  "metrics": {
+    "macro_f1": 0.5616502546528539,
+    "weighted_f1": 0.8619370043603988
+  },
+  "lgbm_params": {
+    "n_estimators": 300,
+    "max_depth": 7,
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "min_child_samples": 20,
+    "reg_alpha": 0.1,
+    "reg_lambda": 0.1,
+    "class_weight": "balanced",
+    "random_state": 42,
+    "n_jobs": -1,
+    "verbose": -1
+  }
+}
