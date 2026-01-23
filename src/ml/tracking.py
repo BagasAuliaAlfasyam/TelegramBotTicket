@@ -109,6 +109,9 @@ class MLTrackingClient:
         """
         Log prediksi ke ML_Tracking sheet.
         
+        Only logs predictions that need review (HIGH, MEDIUM, MANUAL).
+        AUTO predictions are not logged since they don't need review.
+        
         Args:
             tech_message_id: Telegram message ID dari teknisi
             tech_raw_text: Raw text dari teknisi
@@ -117,6 +120,11 @@ class MLTrackingClient:
         """
         if not self._tracking_sheet:
             _LOGGER.warning("Tracking sheet not connected, skipping log")
+            return
+        
+        # Skip AUTO predictions - they don't need review
+        if prediction_result.prediction_status == "AUTO":
+            _LOGGER.debug("Skipping ML_Tracking for AUTO prediction (message %s)", tech_message_id)
             return
         
         try:
