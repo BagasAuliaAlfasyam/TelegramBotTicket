@@ -52,16 +52,13 @@ class MLTrackingClient:
                 self._spreadsheet = client.open(self._config.google_spreadsheet_name)
             
             # Get or create ML_Tracking sheet
-            # Headers match existing sheet structure for training data
-            # Index: 0=tech_message_id, 1=timestamp, 2=tech_raw_text, 3=solving,
-            #        4=Symtomps, 5=reviewed_symtomps, 6=sync_date, 7=source,
-            #        8=ml_confidence, 9=prediction_status, 10=review_status, 11=logs_row_number
+            # SIMPLE: 6 columns only
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
             self._tracking_sheet = self._get_or_create_sheet(
                 ML_TRACKING_SHEET,
                 headers=[
-                    "tech_message_id", "timestamp", "tech_raw_text", "solving",
-                    "Symtomps", "reviewed_symtomps", "sync_date", "source", "ml_confidence", 
-                    "prediction_status", "review_status", "logs_row_number"
+                    "tech_message_id", "tech_raw_text", "solving",
+                    "Symtomps", "ml_confidence", "review_status"
                 ]
             )
             
@@ -133,20 +130,13 @@ class MLTrackingClient:
             review_status = "pending"
         
         try:
-            now = datetime.now(self._tz)
             row = [
                 str(tech_message_id),                              # 0: tech_message_id
-                now.isoformat(),                                    # 1: timestamp
-                tech_raw_text[:500] if tech_raw_text else "",       # 2: tech_raw_text
-                solving[:500] if solving else "",                   # 3: solving
-                prediction_result.predicted_symtomps,               # 4: Symtomps (predicted)
-                "",                                                 # 5: reviewed_symtomps (filled on correction)
-                now.strftime("%Y-%m-%d"),                           # 6: sync_date
-                "realtime",                                         # 7: source (realtime vs batch)
-                prediction_result.ml_confidence,                    # 8: ml_confidence
-                prediction_result.prediction_status,                # 9: prediction_status
-                review_status,                                      # 10: review_status
-                "",                                                 # 11: logs_row_number (optional)
+                tech_raw_text[:500] if tech_raw_text else "",       # 1: tech_raw_text
+                solving[:500] if solving else "",                   # 2: solving
+                prediction_result.predicted_symtomps,               # 3: Symtomps (edit directly if wrong)
+                prediction_result.ml_confidence,                    # 4: ml_confidence
+                review_status,                                      # 5: review_status
             ]
             
             self._tracking_sheet.append_row(row, value_input_option='RAW')
@@ -259,24 +249,14 @@ class MLTrackingClient:
             medium_pending = 0
             
             for row in all_data[1:]:
-                if len(row) >= 11:
-                    # Column indexes: 9=prediction_status, 10=review_status
-                    prediction_status = row[9]
-                    review_status = row[10]
+                if len(row) >= 6:
+                    # Simple 6-column: 5=review_status
+                    review_status = row[5]
                     
-                    # Pending = bukan AUTO dan belum APPROVED/CORRECTED
-                    is_pending = (
-                        prediction_status != "AUTO" and 
-                        review_status not in ("APPROVED", "CORRECTED", "auto_approved")
-                    )
-                    
-                    if is_pending:
-                        if prediction_status == "MANUAL":
-                            manual_pending += 1
-                        elif prediction_status == "HIGH_REVIEW":
-                            high_pending += 1
-                        elif prediction_status == "MEDIUM_REVIEW":
-                            medium_pending += 1
+                    # Pending = review_status == "pending"
+                    if review_status == "pending":
+                        # Count all pending as one bucket
+                        manual_pending += 1
             
             return {
                 "total_pending": manual_pending + high_pending + medium_pending,
@@ -485,7 +465,7 @@ class MLTrackingClient:
         Hitung stats dari ML_Tracking sheet dan update ke Monitoring sheet.
         
         Returns:
-            dict dengan stats hari ini
+            dict dengan stats
         """
         if not self._tracking_sheet:
             _LOGGER.warning("Tracking sheet not connected, cannot calculate stats")
@@ -500,67 +480,50 @@ class MLTrackingClient:
                 _LOGGER.info("No data in ML_Tracking to calculate stats")
                 return {}
             
-            # Filter rows untuk hari ini
-            # Column index: 1=timestamp, 5=ml_confidence, 6=prediction_status, 8=review_status
-            total_predictions = 0
+            # Simple 6-column structure:
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
+            total_predictions = len(all_data) - 1  # exclude header
             confidence_sum = 0.0
             auto_count = 0
-            high_count = 0
-            medium_count = 0
-            manual_count = 0
+            pending_count = 0
             reviewed_count = 0
             
             for row in all_data[1:]:
-                if len(row) < 11:
+                if len(row) < 6:
                     continue
                 
-                # Check if row is from today (timestamp in column 1)
-                timestamp_str = row[1]
+                # Confidence (index 4)
                 try:
-                    if timestamp_str.startswith(today_str) or today_str in timestamp_str:
-                        total_predictions += 1
-                        
-                        # Confidence (index 8)
-                        try:
-                            confidence = float(row[8]) if row[8] else 0.0
-                            confidence_sum += confidence
-                        except ValueError:
-                            pass
-                        
-                        # Prediction status (index 9)
-                        status = row[9]
-                        if status == "AUTO":
-                            auto_count += 1
-                        elif status == "HIGH_REVIEW":
-                            high_count += 1
-                        elif status == "MEDIUM_REVIEW":
-                            medium_count += 1
-                        elif status == "MANUAL":
-                            manual_count += 1
-                        
-                        # Review status (index 10)
-                        if len(row) > 10 and row[10] in ("APPROVED", "CORRECTED"):
-                            reviewed_count += 1
-                except Exception:
-                    continue
+                    confidence = float(row[4]) if row[4] else 0.0
+                    confidence_sum += confidence
+                    
+                    # Count by confidence level
+                    if confidence >= 0.90:
+                        auto_count += 1
+                except ValueError:
+                    pass
+                
+                # Review status (index 5)
+                review_status = row[5]
+                if review_status == "auto_approved":
+                    pass  # already counted in auto_count
+                elif review_status == "pending":
+                    pending_count += 1
+                elif review_status in ("APPROVED", "CORRECTED", "TRAINED"):
+                    reviewed_count += 1
             
-            if total_predictions == 0:
-                _LOGGER.info("No predictions today in ML_Tracking")
-                return {}
-            
-            avg_confidence = confidence_sum / total_predictions
-            accuracy = reviewed_count / total_predictions if total_predictions > 0 else 0.0
+            avg_confidence = confidence_sum / total_predictions if total_predictions > 0 else 0.0
             
             stats = {
                 "date": today_str,
                 "total_predictions": total_predictions,
                 "avg_confidence": avg_confidence,
                 "auto_count": auto_count,
-                "high_count": high_count,
-                "medium_count": medium_count,
-                "manual_count": manual_count,
+                "high_count": 0,
+                "medium_count": 0,
+                "manual_count": pending_count,
                 "reviewed_count": reviewed_count,
-                "accuracy": accuracy,
+                "accuracy": reviewed_count / total_predictions if total_predictions > 0 else 0.0,
                 "model_version": model_version,
             }
             
@@ -568,16 +531,25 @@ class MLTrackingClient:
             self.update_daily_stats(
                 model_version=model_version,
                 total_predictions=total_predictions,
-                avg_confidence=avg_confidence * 100,  # Convert to percentage
+                avg_confidence=avg_confidence * 100,
                 auto_count=auto_count,
-                high_count=high_count,
-                medium_count=medium_count,
-                manual_count=manual_count,
+                high_count=0,
+                medium_count=0,
+                manual_count=pending_count,
                 reviewed_count=reviewed_count,
-                accuracy=accuracy * 100,  # Convert to percentage
+                accuracy=stats["accuracy"] * 100,
             )
             
             _LOGGER.info(
+                "Daily stats updated: %d predictions, %.1f%% avg confidence, %d reviewed",
+                total_predictions, avg_confidence * 100, reviewed_count
+            )
+            
+            return stats
+            
+        except (GSpreadException, APIError) as exc:
+            _LOGGER.exception("Failed to calculate daily stats: %s", exc)
+            return {}
                 "Updated monitoring stats: %d predictions, %.1f%% avg confidence, %d AUTO",
                 total_predictions, avg_confidence * 100, auto_count
             )

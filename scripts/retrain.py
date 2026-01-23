@@ -453,52 +453,31 @@ class ModelRetrainer:
         df = pd.DataFrame(data[1:], columns=data[0])
         
         # ========================================
-        # FILTER BY REVIEW STATUS
-        # Use ALL reviewed data for training (including previously trained)
+        # SIMPLE 6-COLUMN STRUCTURE:
+        # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
+        #
+        # FILTER BY REVIEW STATUS - Use reviewed data for training:
         # - APPROVED: prediction was correct
-        # - CORRECTED: prediction was wrong, label has been fixed
-        # - TRAINED: already used in previous training (but still valid data!)
+        # - CORRECTED: label was edited directly in Symtomps column
+        # - TRAINED: already used in previous training
         # - auto_approved: AUTO predictions with high confidence (>=90%)
-        # - pending/SKIPPED: not reviewed or ignored
         # ========================================
         if 'review_status' in df.columns:
-            # Include TRAINED because ML models don't have memory
-            # Every retrain needs ALL available data
             valid_statuses = ['APPROVED', 'CORRECTED', 'TRAINED', 'auto_approved']
             before_count = len(df)
             df = df[df['review_status'].isin(valid_statuses)]
             after_count = len(df)
-            _LOGGER.info(f"  Filtered by review_status (APPROVED/CORRECTED/TRAINED/auto_approved): {after_count}/{before_count} rows")
+            _LOGGER.info(f"  Filtered by review_status: {after_count}/{before_count} rows")
             
             if after_count == 0:
                 _LOGGER.warning("  No valid training data found in ML_Tracking!")
                 return None
         else:
-            _LOGGER.warning("  review_status column not found - using all data (legacy mode)")
+            _LOGGER.warning("  review_status column not found - using all data")
         
-        # Rename columns to match expected format
-        # For CORRECTED rows: use reviewed_symtomps (the corrected label)
-        # For APPROVED/auto_approved: use Symtomps (the original prediction was correct)
-        column_mapping = {
-            'tech_raw_text': 'tech raw text',
-        }
-        for old_name, new_name in column_mapping.items():
-            if old_name in df.columns:
-                df = df.rename(columns={old_name: new_name})
-        
-        # Use reviewed_symtomps if available (for corrections), else use Symtomps
-        if 'reviewed_symtomps' in df.columns and 'Symtomps' in df.columns:
-            # For rows with reviewed_symtomps filled, use that as the label
-            # For rows without (APPROVED/auto_approved), use original Symtomps
-            df['Symtomps'] = df.apply(
-                lambda row: row['reviewed_symtomps'] if row['reviewed_symtomps'].strip() else row['Symtomps'],
-                axis=1
-            )
-            _LOGGER.info("  Using reviewed_symtomps for corrected labels")
-        
-        # Select only training columns (include tech_message_id for deduplication)
+        # Select only training columns (simple structure)
         training_cols = []
-        for col in ['tech_message_id', 'tech raw text', 'tech_raw_text', 'solving', 'Symtomps']:
+        for col in ['tech_message_id', 'tech_raw_text', 'solving', 'Symtomps']:
             if col in df.columns:
                 training_cols.append(col)
         
@@ -855,11 +834,10 @@ def check_retrain_threshold(config: Config, threshold: int = 100) -> tuple[bool,
         if len(data) <= 1:
             return False, 0
         
-        # Count reviewed rows (review_status is at index 10)
-        # Valid review statuses: APPROVED, CORRECTED, auto_approved
+        # Simple 6-column: review_status is at index 5
         reviewed_count = sum(
             1 for row in data[1:] 
-            if len(row) > 10 and row[10] in ('APPROVED', 'CORRECTED', 'auto_approved')
+            if len(row) > 5 and row[5] in ('APPROVED', 'CORRECTED', 'auto_approved', 'TRAINED')
         )
         
         should_retrain = reviewed_count >= threshold
