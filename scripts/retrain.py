@@ -477,13 +477,24 @@ class ModelRetrainer:
             _LOGGER.warning("  review_status column not found - using all data (legacy mode)")
         
         # Rename columns to match expected format
+        # For CORRECTED rows: use reviewed_symtomps (the corrected label)
+        # For APPROVED/auto_approved: use Symtomps (the original prediction was correct)
         column_mapping = {
             'tech_raw_text': 'tech raw text',
-            'reviewed_symtomps': 'Symtomps',  # ML_Tracking uses reviewed_symtomps
         }
         for old_name, new_name in column_mapping.items():
             if old_name in df.columns:
                 df = df.rename(columns={old_name: new_name})
+        
+        # Use reviewed_symtomps if available (for corrections), else use Symtomps
+        if 'reviewed_symtomps' in df.columns and 'Symtomps' in df.columns:
+            # For rows with reviewed_symtomps filled, use that as the label
+            # For rows without (APPROVED/auto_approved), use original Symtomps
+            df['Symtomps'] = df.apply(
+                lambda row: row['reviewed_symtomps'] if row['reviewed_symtomps'].strip() else row['Symtomps'],
+                axis=1
+            )
+            _LOGGER.info("  Using reviewed_symtomps for corrected labels")
         
         # Select only training columns (include tech_message_id for deduplication)
         training_cols = []
@@ -844,10 +855,11 @@ def check_retrain_threshold(config: Config, threshold: int = 100) -> tuple[bool,
         if len(data) <= 1:
             return False, 0
         
-        # Count reviewed rows
+        # Count reviewed rows (review_status is at index 10)
+        # Valid review statuses: APPROVED, CORRECTED, auto_approved
         reviewed_count = sum(
             1 for row in data[1:] 
-            if len(row) > 8 and row[8] == 'reviewed'
+            if len(row) > 10 and row[10] in ('APPROVED', 'CORRECTED', 'auto_approved')
         )
         
         should_retrain = reviewed_count >= threshold
@@ -890,8 +902,8 @@ def main():
     
     args = parser.parse_args()
     
-    # Load config
-    config = Config()
+    # Load config from environment
+    config = Config.from_env()
     
     # Check threshold if specified
     if args.check_threshold > 0 and not args.force:

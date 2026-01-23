@@ -53,11 +53,14 @@ class MLTrackingClient:
             
             # Get or create ML_Tracking sheet
             # Headers match existing sheet structure for training data
+            # Index: 0=tech_message_id, 1=timestamp, 2=tech_raw_text, 3=solving,
+            #        4=Symtomps, 5=reviewed_symtomps, 6=sync_date, 7=source,
+            #        8=ml_confidence, 9=prediction_status, 10=review_status, 11=logs_row_number
             self._tracking_sheet = self._get_or_create_sheet(
                 ML_TRACKING_SHEET,
                 headers=[
                     "tech_message_id", "timestamp", "tech_raw_text", "solving",
-                    "Symtomps", "sync_date", "source", "ml_confidence", 
+                    "Symtomps", "reviewed_symtomps", "sync_date", "source", "ml_confidence", 
                     "prediction_status", "review_status", "logs_row_number"
                 ]
             )
@@ -132,17 +135,18 @@ class MLTrackingClient:
         try:
             now = datetime.now(self._tz)
             row = [
-                str(tech_message_id),                              # tech_message_id
-                now.isoformat(),                                    # timestamp
-                tech_raw_text[:500] if tech_raw_text else "",       # tech_raw_text
-                solving[:500] if solving else "",                   # solving
-                prediction_result.predicted_symtomps,               # Symtomps (predicted)
-                now.strftime("%Y-%m-%d"),                           # sync_date
-                "realtime",                                         # source (realtime vs batch)
-                prediction_result.ml_confidence,                    # ml_confidence
-                prediction_result.prediction_status,                # prediction_status
-                review_status,                                      # review_status
-                "",                                                 # logs_row_number (optional)
+                str(tech_message_id),                              # 0: tech_message_id
+                now.isoformat(),                                    # 1: timestamp
+                tech_raw_text[:500] if tech_raw_text else "",       # 2: tech_raw_text
+                solving[:500] if solving else "",                   # 3: solving
+                prediction_result.predicted_symtomps,               # 4: Symtomps (predicted)
+                "",                                                 # 5: reviewed_symtomps (filled on correction)
+                now.strftime("%Y-%m-%d"),                           # 6: sync_date
+                "realtime",                                         # 7: source (realtime vs batch)
+                prediction_result.ml_confidence,                    # 8: ml_confidence
+                prediction_result.prediction_status,                # 9: prediction_status
+                review_status,                                      # 10: review_status
+                "",                                                 # 11: logs_row_number (optional)
             ]
             
             self._tracking_sheet.append_row(row, value_input_option='RAW')
@@ -255,14 +259,15 @@ class MLTrackingClient:
             medium_pending = 0
             
             for row in all_data[1:]:
-                if len(row) >= 9:
-                    prediction_status = row[6]
-                    review_status = row[8]
+                if len(row) >= 11:
+                    # Column indexes: 9=prediction_status, 10=review_status
+                    prediction_status = row[9]
+                    review_status = row[10]
                     
                     # Pending = bukan AUTO dan belum APPROVED/CORRECTED
                     is_pending = (
                         prediction_status != "AUTO" and 
-                        review_status not in ("APPROVED", "CORRECTED")
+                        review_status not in ("APPROVED", "CORRECTED", "auto_approved")
                     )
                     
                     if is_pending:
@@ -506,7 +511,7 @@ class MLTrackingClient:
             reviewed_count = 0
             
             for row in all_data[1:]:
-                if len(row) < 9:
+                if len(row) < 11:
                     continue
                 
                 # Check if row is from today (timestamp in column 1)
@@ -515,15 +520,15 @@ class MLTrackingClient:
                     if timestamp_str.startswith(today_str) or today_str in timestamp_str:
                         total_predictions += 1
                         
-                        # Confidence
+                        # Confidence (index 8)
                         try:
-                            confidence = float(row[5]) if row[5] else 0.0
+                            confidence = float(row[8]) if row[8] else 0.0
                             confidence_sum += confidence
                         except ValueError:
                             pass
                         
-                        # Prediction status
-                        status = row[6]
+                        # Prediction status (index 9)
+                        status = row[9]
                         if status == "AUTO":
                             auto_count += 1
                         elif status == "HIGH_REVIEW":
@@ -533,8 +538,8 @@ class MLTrackingClient:
                         elif status == "MANUAL":
                             manual_count += 1
                         
-                        # Review status
-                        if len(row) > 8 and row[8] in ("APPROVED", "CORRECTED"):
+                        # Review status (index 10)
+                        if len(row) > 10 and row[10] in ("APPROVED", "CORRECTED"):
                             reviewed_count += 1
                 except Exception:
                     continue
