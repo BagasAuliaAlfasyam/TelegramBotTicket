@@ -377,6 +377,7 @@ class AdminCommandHandler:
             # Get reviewed count (APPROVED + CORRECTED) from ML_Tracking
             reviewed_count = self._ml_tracking.get_reviewed_count()
             trained_count = self._ml_tracking.get_trained_count()
+            class_dist = self._ml_tracking.get_reviewed_class_distribution()
             
             min_samples = 100  # Minimum for retraining
             ready = reviewed_count >= min_samples
@@ -384,21 +385,56 @@ class AdminCommandHandler:
             if self._ml_classifier:
                 current_version = self._ml_classifier.model_version
                 current_samples = self._ml_classifier.get_metadata().get("training_samples", "N/A")
+                current_classes = self._ml_classifier.get_metadata().get("num_classes", 0)
             else:
                 current_version = "N/A"
                 current_samples = "N/A"
+                current_classes = 0
             
             status_emoji = "✅" if ready else "⏳"
             
             message = (
                 f"🔄 **Retrain Status**\n\n"
                 f"**Current Model:** {current_version}\n"
-                f"**Training Samples:** {current_samples}\n\n"
+                f"**Training Samples:** {current_samples}\n"
+                f"**Current Classes:** {current_classes}\n\n"
                 f"**New Data Available:**\n"
                 f"  📝 Ready for Training: {reviewed_count}\n"
                 f"  ✅ Already Trained: {trained_count}\n\n"
-                f"**Status:** {status_emoji} {'Ready for retrain!' if ready else f'Need {min_samples - reviewed_count} more samples'}\n\n"
             )
+            
+            # Add class distribution info
+            if class_dist:
+                # Sort by count descending
+                sorted_classes = sorted(class_dist.items(), key=lambda x: x[1], reverse=True)
+                
+                # Check for new classes (not in current model)
+                new_classes = []
+                if self._ml_classifier and hasattr(self._ml_classifier, '_label_encoder'):
+                    le = self._ml_classifier._label_encoder
+                    if le is not None:
+                        if isinstance(le, dict):
+                            existing = set(le.values())
+                        else:
+                            existing = set(le.classes_)
+                        new_classes = [(c, n) for c, n in sorted_classes if c not in existing]
+                
+                message += "**Class Distribution (New Data):**\n"
+                for cls, count in sorted_classes[:10]:  # Top 10
+                    is_new = " 🆕" if any(c == cls for c, _ in new_classes) else ""
+                    message += f"  • {cls}: {count}{is_new}\n"
+                
+                if len(sorted_classes) > 10:
+                    message += f"  ... +{len(sorted_classes) - 10} more classes\n"
+                
+                if new_classes:
+                    message += f"\n🆕 **New Classes:** {len(new_classes)}\n"
+                    for cls, count in new_classes:
+                        message += f"  • {cls}: {count} samples\n"
+                
+                message += "\n"
+            
+            message += f"**Status:** {status_emoji} {'Ready for retrain!' if ready else f'Need {min_samples - reviewed_count} more samples'}\n\n"
             
             if ready:
                 message += (

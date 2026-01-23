@@ -367,6 +367,44 @@ class MLTrackingClient:
             _LOGGER.exception("Failed to get reviewed count: %s", exc)
             return 0
     
+    def get_reviewed_class_distribution(self) -> dict[str, int]:
+        """
+        Get class distribution for reviewed predictions ready for training.
+        
+        Returns:
+            dict: {class_name: count} for APPROVED/CORRECTED rows
+        """
+        if not self._tracking_sheet:
+            return {}
+        
+        try:
+            all_data = self._tracking_sheet.get_all_values()
+            if len(all_data) <= 1:
+                return {}
+            
+            # Find columns from header
+            headers = all_data[0]
+            symtomps_col = headers.index("Symtomps") if "Symtomps" in headers else -1
+            review_col = headers.index("review_status") if "review_status" in headers else -1
+            
+            if symtomps_col == -1 or review_col == -1:
+                _LOGGER.warning("Required columns not found in ML_Tracking")
+                return {}
+            
+            # Count by class for APPROVED/CORRECTED
+            class_counts = {}
+            for row in all_data[1:]:
+                if len(row) > review_col and row[review_col] in ("APPROVED", "CORRECTED"):
+                    symtomps = row[symtomps_col].strip() if len(row) > symtomps_col else ""
+                    if symtomps:
+                        class_counts[symtomps] = class_counts.get(symtomps, 0) + 1
+            
+            return class_counts
+            
+        except (GSpreadException, APIError) as exc:
+            _LOGGER.exception("Failed to get class distribution: %s", exc)
+            return {}
+    
     def get_trained_count(self) -> int:
         """
         Get count of already trained data.
