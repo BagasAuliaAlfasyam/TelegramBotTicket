@@ -458,16 +458,17 @@ class ModelRetrainer:
         # - APPROVED: prediction was correct
         # - CORRECTED: prediction was wrong, label has been fixed
         # - TRAINED: already used in previous training (but still valid data!)
+        # - auto_approved: AUTO predictions with high confidence (>=90%)
         # - pending/SKIPPED: not reviewed or ignored
         # ========================================
         if 'review_status' in df.columns:
             # Include TRAINED because ML models don't have memory
             # Every retrain needs ALL available data
-            valid_statuses = ['APPROVED', 'CORRECTED', 'TRAINED']
+            valid_statuses = ['APPROVED', 'CORRECTED', 'TRAINED', 'auto_approved']
             before_count = len(df)
             df = df[df['review_status'].isin(valid_statuses)]
             after_count = len(df)
-            _LOGGER.info(f"  Filtered by review_status (APPROVED/CORRECTED/TRAINED): {after_count}/{before_count} rows")
+            _LOGGER.info(f"  Filtered by review_status (APPROVED/CORRECTED/TRAINED/auto_approved): {after_count}/{before_count} rows")
             
             if after_count == 0:
                 _LOGGER.warning("  No valid training data found in ML_Tracking!")
