@@ -225,19 +225,25 @@ class AdminCommandHandler:
     
     async def tiket_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /tiketreport [monthly|quarterly] - Generate ticket & SLA report from Logs sheet
+        /tiketreport [monthly|quarterly] [bulan/quarter] [tahun] - Generate ticket & SLA report from Logs sheet
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
         
-        # Parse period argument
+        # Parse arguments
         args = context.args or []
         period = args[0].lower() if args else "monthly"
         
         if period not in ["monthly", "quarterly"]:
             await update.message.reply_text(
-                "Usage: /tiketreport [monthly|quarterly]\n"
-                "Example: /tiketreport monthly"
+                "📋 Penggunaan:\n"
+                "  /tiketreport monthly [bulan] [tahun]\n"
+                "  /tiketreport quarterly [quarter] [tahun]\n\n"
+                "Contoh:\n"
+                "  /tiketreport monthly → bulan ini\n"
+                "  /tiketreport monthly 12 2025 → Desember 2025\n"
+                "  /tiketreport quarterly → quarter ini\n"
+                "  /tiketreport quarterly 4 2025 → Q4 2025"
             )
             return
         
@@ -281,16 +287,62 @@ class AdminCommandHandler:
                           "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
             
             if period == "monthly":
-                # Current month
-                start_date = today.replace(day=1)
-                period_label = f"{nama_bulan[today.month]} {today.year}"
+                # Parse optional month and year
+                if len(args) >= 3:
+                    try:
+                        month = int(args[1])
+                        year = int(args[2])
+                        if month < 1 or month > 12:
+                            await update.message.reply_text("❌ Bulan harus 1-12")
+                            return
+                        start_date = datetime(year, month, 1).date()
+                        # End date is last day of month
+                        if month == 12:
+                            end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+                        else:
+                            end_date = datetime(year, month + 1, 1).date() - timedelta(days=1)
+                    except ValueError:
+                        await update.message.reply_text("❌ Format: /tiketreport monthly [bulan] [tahun]")
+                        return
+                else:
+                    # Current month
+                    start_date = today.replace(day=1)
+                    end_date = today
+                    month = today.month
+                    year = today.year
+                period_label = f"{nama_bulan[month]} {year}"
             else:  # quarterly
-                # Current quarter
-                quarter = (today.month - 1) // 3
-                start_month = quarter * 3 + 1
-                start_date = today.replace(month=start_month, day=1)
+                # Parse optional quarter and year
+                if len(args) >= 3:
+                    try:
+                        quarter = int(args[1])
+                        year = int(args[2])
+                        if quarter < 1 or quarter > 4:
+                            await update.message.reply_text("❌ Quarter harus 1-4")
+                            return
+                        quarter = quarter - 1  # Convert to 0-indexed
+                        start_month = quarter * 3 + 1
+                        start_date = datetime(year, start_month, 1).date()
+                        # End date is last day of quarter
+                        end_month = start_month + 2
+                        if end_month == 12:
+                            end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+                        else:
+                            end_date = datetime(year, end_month + 1, 1).date() - timedelta(days=1)
+                    except ValueError:
+                        await update.message.reply_text("❌ Format: /tiketreport quarterly [quarter] [tahun]")
+                        return
+                else:
+                    # Current quarter
+                    quarter = (today.month - 1) // 3
+                    start_month = quarter * 3 + 1
+                    start_date = today.replace(month=start_month, day=1)
+                    end_date = today
+                    year = today.year
                 quarter_names = ["Q1", "Q2", "Q3", "Q4"]
-                period_label = f"{quarter_names[quarter]} {today.year}"
+                # Get months in this quarter
+                q_months = [nama_bulan[start_month], nama_bulan[start_month + 1], nama_bulan[start_month + 2]]
+                period_label = f"{quarter_names[quarter]} {year} ({', '.join(q_months)})"
             
             # Filter and analyze data
             total_tickets = 0
@@ -319,7 +371,7 @@ class AdminCommandHandler:
                     continue
                 
                 # Check if in period
-                if ticket_date < start_date or ticket_date > today:
+                if ticket_date < start_date or ticket_date > end_date:
                     continue
                 
                 total_tickets += 1
