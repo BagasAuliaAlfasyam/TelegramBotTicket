@@ -58,13 +58,16 @@ class AdminCommandHandler:
             return
             
         try:
-            stats = self._ml_tracking.get_today_stats()
+            # Calculate stats real-time from ML_Tracking instead of cached Monitoring sheet
+            model_version = self._ml_classifier.model_version if self._ml_classifier else "unknown"
+            stats = self._ml_tracking.get_realtime_stats()
             pending = self._ml_tracking.get_pending_review_count()
             
-            if not stats:
+            if not stats or stats.get("total_predictions", 0) == 0:
                 await update.message.reply_text(
                     "📊 **Today's ML Stats**\n\n"
-                    "No predictions recorded today yet.",
+                    "No predictions recorded yet.\n\n"
+                    "Stats are calculated from ML_Tracking sheet.",
                     parse_mode="Markdown"
                 )
                 return
@@ -81,17 +84,17 @@ class AdminCommandHandler:
             auto_pct = (auto_count / total * 100) if total > 0 else 0
             
             message = (
-                f"📊 **Today's ML Stats** ({datetime.now(TZ).strftime('%d %b %Y')})\n\n"
+                f"📊 **ML Stats (All Time)**\n\n"
                 f"📈 **Total Predictions:** {total}\n"
                 f"🎯 **Avg Confidence:** {avg_conf:.1f}%\n\n"
                 f"**Distribution:**\n"
-                f"  ✅ AUTO (≥90%): {auto_count} ({auto_pct:.1f}%)\n"
-                f"  🔶 HIGH REVIEW: {high_count}\n"
-                f"  🟡 MEDIUM REVIEW: {medium_count}\n"
-                f"  🔴 MANUAL: {manual_count}\n\n"
+                f"  ✅ AUTO (≥80%): {auto_count} ({auto_pct:.1f}%)\n"
+                f"  🔶 HIGH (70-80%): {high_count}\n"
+                f"  🟡 MEDIUM (50-70%): {medium_count}\n"
+                f"  🔴 MANUAL (<50%): {manual_count}\n\n"
                 f"**Review Status:**\n"
                 f"  📋 Pending Review: {pending.get('total_pending', 0)}\n"
-                f"  ✅ Reviewed Today: {reviewed}\n"
+                f"  ✅ Reviewed: {reviewed}\n"
             )
             
             if self._ml_classifier:

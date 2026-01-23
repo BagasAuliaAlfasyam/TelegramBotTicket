@@ -234,6 +234,75 @@ class MLTrackingClient:
             _LOGGER.exception("Failed to get today stats: %s", exc)
             return {}
     
+    def get_realtime_stats(self) -> dict:
+        """
+        Get real-time stats directly from ML_Tracking sheet.
+        This is calculated on-the-fly instead of using cached Monitoring sheet.
+        """
+        if not self._tracking_sheet:
+            return {}
+        
+        try:
+            all_data = self._tracking_sheet.get_all_values()
+            if len(all_data) <= 1:
+                return {}
+            
+            # Simple 6-column structure:
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
+            total_predictions = len(all_data) - 1  # exclude header
+            confidence_sum = 0.0
+            auto_count = 0      # >= 80%
+            high_count = 0      # 70-80%
+            medium_count = 0    # 50-70%
+            manual_count = 0    # < 50%
+            reviewed_count = 0
+            pending_count = 0
+            
+            for row in all_data[1:]:
+                if len(row) < 6:
+                    continue
+                
+                # Confidence (index 4)
+                try:
+                    confidence = float(row[4]) if row[4] else 0.0
+                    confidence_sum += confidence
+                    
+                    # Count by confidence level (matching threshold in classifier.py)
+                    if confidence >= 0.80:
+                        auto_count += 1
+                    elif confidence >= 0.70:
+                        high_count += 1
+                    elif confidence >= 0.50:
+                        medium_count += 1
+                    else:
+                        manual_count += 1
+                except ValueError:
+                    manual_count += 1
+                
+                # Review status (index 5)
+                review_status = row[5]
+                if review_status in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
+                    reviewed_count += 1
+                elif review_status == "pending":
+                    pending_count += 1
+            
+            avg_confidence = (confidence_sum / total_predictions * 100) if total_predictions > 0 else 0.0
+            
+            return {
+                "total_predictions": total_predictions,
+                "avg_confidence": avg_confidence,
+                "auto_count": auto_count,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "manual_count": manual_count,
+                "reviewed_count": reviewed_count,
+                "pending_count": pending_count,
+            }
+            
+        except (GSpreadException, APIError) as exc:
+            _LOGGER.exception("Failed to get realtime stats: %s", exc)
+            return {}
+    
     def get_pending_review_count(self) -> dict:
         """Hitung jumlah rows yang butuh review (belum APPROVED/CORRECTED)."""
         if not self._tracking_sheet:
