@@ -550,12 +550,3 @@ class MLTrackingClient:
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed to calculate daily stats: %s", exc)
             return {}
-                "Updated monitoring stats: %d predictions, %.1f%% avg confidence, %d AUTO",
-                total_predictions, avg_confidence * 100, auto_count
-            )
-            
-            return stats
-            
-        except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to calculate daily stats: %s", exc)
-            return {}
