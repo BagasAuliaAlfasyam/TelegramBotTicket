@@ -309,9 +309,9 @@ class OpsCollector:
             solving_text = parsed["solving"] if parsed else ""
             ml_prediction = self._ml_classifier.predict(tech_raw_text, solving_text)
             
-            # Hanya isi Symtomps jika confidence >= 80% (AUTO status)
-            # Pending (confidence < 80%) tetap log ke Logs tapi Symtomps kosong
-            if ml_prediction.prediction_status == "AUTO":
+            # Hanya isi Symtomps jika confidence >= 80%
+            # Di bawah 80% tetap log ke Logs tapi Symtomps kosong
+            if ml_prediction.ml_confidence >= 0.80:
                 symtomps_label = ml_prediction.predicted_symtomps
             else:
                 symtomps_label = ""  # Kosongkan untuk review manual
@@ -330,7 +330,7 @@ class OpsCollector:
                 ml_prediction.predicted_symtomps,
                 ml_prediction.ml_confidence * 100,
                 ml_prediction.prediction_status,
-                symtomps_label or "(empty - pending review)"
+                symtomps_label or "(empty - below 80%)"
             )
         
         # Tambah kolom Symtomps ke row (kolom T, index 19)
