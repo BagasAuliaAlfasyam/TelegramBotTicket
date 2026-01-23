@@ -131,6 +131,9 @@ async def run_monitoring_scheduler(
     """
     Background scheduler to update Monitoring sheet stats hourly.
     
+    Calculates stats for the current hour from ML_Tracking sheet
+    and updates the Monitoring sheet with hourly granularity.
+    
     Args:
         ml_classifier: ML classifier for model version
         ml_tracking: ML tracking client
@@ -141,7 +144,7 @@ async def run_monitoring_scheduler(
         logger.warning("ML Tracking not initialized, monitoring scheduler disabled")
         return
     
-    logger.info("Starting Monitoring Scheduler (interval: %d seconds)", interval_seconds)
+    logger.info("Starting Hourly Monitoring Scheduler (interval: %d seconds)", interval_seconds)
     
     try:
         while True:
@@ -151,23 +154,24 @@ async def run_monitoring_scheduler(
             try:
                 model_version = ml_classifier.model_version if ml_classifier else "unknown"
                 
-                logger.info("Scheduler: Updating monitoring stats...")
-                stats = ml_tracking.calculate_and_update_daily_stats(model_version)
+                logger.info("Scheduler: Updating hourly monitoring stats...")
+                stats = ml_tracking.calculate_and_update_hourly_stats(model_version)
                 
                 if stats:
                     logger.info(
-                        "Scheduler: Stats updated - %d predictions, %.1f%% avg confidence",
+                        "Scheduler: Hourly stats updated for %s - %d predictions, %.1f%% avg confidence",
+                        stats.get("datetime_hour", "unknown"),
                         stats.get("total_predictions", 0),
                         stats.get("avg_confidence", 0) * 100
                     )
                 else:
-                    logger.debug("Scheduler: No predictions today to update")
+                    logger.debug("Scheduler: No predictions this hour to update")
                     
             except Exception as e:
-                logger.error("Scheduler: Failed to update stats: %s", e)
+                logger.error("Scheduler: Failed to update hourly stats: %s", e)
                 
     except asyncio.CancelledError:
-        logger.info("Stopping Monitoring Scheduler...")
+        logger.info("Stopping Hourly Monitoring Scheduler...")
         raise
 
 

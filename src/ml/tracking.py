@@ -52,22 +52,23 @@ class MLTrackingClient:
                 self._spreadsheet = client.open(self._config.google_spreadsheet_name)
             
             # Get or create ML_Tracking sheet
-            # SIMPLE: 6 columns only
-            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
+            # 7 columns: added created_at for hourly tracking
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status, 6=created_at
             self._tracking_sheet = self._get_or_create_sheet(
                 ML_TRACKING_SHEET,
                 headers=[
                     "tech_message_id", "tech_raw_text", "solving",
-                    "Symtomps", "ml_confidence", "review_status"
+                    "Symtomps", "ml_confidence", "review_status", "created_at"
                 ]
             )
             
             # Get or create Monitoring sheet (optional, may timeout)
+            # Using datetime_hour for hourly granularity
             try:
                 self._monitoring_sheet = self._get_or_create_sheet(
                     MONITORING_SHEET,
                     headers=[
-                        "date", "total_predictions", "avg_confidence",
+                        "datetime_hour", "total_predictions", "avg_confidence",
                         "auto_count", "high_count", "medium_count", "manual_count",
                         "reviewed_count", "accuracy", "model_version"
                     ]
@@ -130,6 +131,10 @@ class MLTrackingClient:
             review_status = "pending"
         
         try:
+            # Get current timestamp in configured timezone
+            now = datetime.now(self._tz)
+            created_at = now.strftime("%Y-%m-%d %H:%M:%S")
+            
             row = [
                 str(tech_message_id),                              # 0: tech_message_id
                 tech_raw_text[:500] if tech_raw_text else "",       # 1: tech_raw_text
@@ -137,6 +142,7 @@ class MLTrackingClient:
                 prediction_result.predicted_symtomps,               # 3: Symtomps (edit directly if wrong)
                 prediction_result.ml_confidence,                    # 4: ml_confidence
                 review_status,                                      # 5: review_status
+                created_at,                                         # 6: created_at
             ]
             
             self._tracking_sheet.append_row(row, value_input_option='RAW')
@@ -145,8 +151,9 @@ class MLTrackingClient:
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed to log prediction: %s", exc)
     
-    def update_daily_stats(
+    def update_hourly_stats(
         self,
+        datetime_hour: str,
         model_version: str,
         total_predictions: int,
         avg_confidence: float,
@@ -158,24 +165,25 @@ class MLTrackingClient:
         accuracy: float = 0.0,
     ) -> None:
         """
-        Update atau insert stats harian ke Monitoring sheet.
+        Update atau insert stats per jam ke Monitoring sheet.
+        
+        Args:
+            datetime_hour: Format "YYYY-MM-DD HH:00" (e.g., "2026-01-23 14:00")
         """
         if not self._monitoring_sheet:
             _LOGGER.warning("Monitoring sheet not connected, skipping stats")
             return
         
         try:
-            today_str = date.today().isoformat()
-            
-            # Cari row untuk hari ini
+            # Cari row untuk jam ini
             try:
-                cell = self._monitoring_sheet.find(today_str, in_column=1)
+                cell = self._monitoring_sheet.find(datetime_hour, in_column=1)
                 row_idx = cell.row
             except Exception:
                 row_idx = None
             
             row_data = [
-                today_str,
+                datetime_hour,
                 total_predictions,
                 round(avg_confidence, 4),
                 auto_count,
@@ -198,25 +206,125 @@ class MLTrackingClient:
                 # Append new row
                 self._monitoring_sheet.append_row(row_data, value_input_option='RAW')
             
-            _LOGGER.debug("Updated daily stats for %s", today_str)
+            _LOGGER.debug("Updated hourly stats for %s", datetime_hour)
             
         except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to update daily stats: %s", exc)
+            _LOGGER.exception("Failed to update hourly stats: %s", exc)
+    
+    # Keep backward compatibility alias
+    def update_daily_stats(
+        self,
+        model_version: str,
+        total_predictions: int,
+        avg_confidence: float,
+        auto_count: int,
+        high_count: int,
+        medium_count: int,
+        manual_count: int,
+        reviewed_count: int = 0,
+        accuracy: float = 0.0,
+    ) -> None:
+        """Backward compatibility wrapper - now updates hourly."""
+        now = datetime.now(self._tz)
+        datetime_hour = now.strftime("%Y-%m-%d %H:00")
+        self.update_hourly_stats(
+            datetime_hour=datetime_hour,
+            model_version=model_version,
+            total_predictions=total_predictions,
+            avg_confidence=avg_confidence,
+            auto_count=auto_count,
+            high_count=high_count,
+            medium_count=medium_count,
+            manual_count=manual_count,
+            reviewed_count=reviewed_count,
+            accuracy=accuracy,
+        )
     
     def get_today_stats(self) -> dict:
-        """Get stats untuk hari ini dari Monitoring sheet."""
+        """
+        Get aggregated stats untuk hari ini dari Monitoring sheet.
+        Sums all hourly rows for today's date.
+        """
         if not self._monitoring_sheet:
             return {}
         
         try:
-            today_str = date.today().isoformat()
+            today_str = date.today().isoformat()  # "2026-01-23"
+            
+            all_data = self._monitoring_sheet.get_all_values()
+            if len(all_data) <= 1:
+                return {}
+            
+            # Aggregate all hourly rows for today
+            total_predictions = 0
+            confidence_weighted_sum = 0.0
+            auto_count = 0
+            high_count = 0
+            medium_count = 0
+            manual_count = 0
+            reviewed_count = 0
+            model_version = ""
+            
+            for row in all_data[1:]:
+                if len(row) < 10:
+                    continue
+                
+                # Check if datetime_hour starts with today's date
+                datetime_hour = row[0]
+                if not datetime_hour.startswith(today_str):
+                    continue
+                
+                try:
+                    predictions = int(row[1]) if row[1] else 0
+                    total_predictions += predictions
+                    
+                    if row[2] and predictions > 0:
+                        confidence_weighted_sum += float(row[2]) * predictions
+                    
+                    auto_count += int(row[3]) if row[3] else 0
+                    high_count += int(row[4]) if row[4] else 0
+                    medium_count += int(row[5]) if row[5] else 0
+                    manual_count += int(row[6]) if row[6] else 0
+                    reviewed_count += int(row[7]) if row[7] else 0
+                    model_version = row[9] if row[9] else model_version
+                except (ValueError, IndexError):
+                    continue
+            
+            if total_predictions == 0:
+                return {}
+            
+            return {
+                "date": today_str,
+                "total_predictions": total_predictions,
+                "avg_confidence": confidence_weighted_sum / total_predictions,
+                "auto_count": auto_count,
+                "high_count": high_count,
+                "medium_count": medium_count,
+                "manual_count": manual_count,
+                "reviewed_count": reviewed_count,
+                "accuracy": (reviewed_count / total_predictions * 100) if total_predictions > 0 else 0.0,
+                "model_version": model_version,
+            }
+                
+        except (GSpreadException, APIError) as exc:
+            _LOGGER.exception("Failed to get today stats: %s", exc)
+            return {}
+    
+    def get_current_hour_stats(self) -> dict:
+        """Get stats untuk jam ini dari Monitoring sheet."""
+        if not self._monitoring_sheet:
+            return {}
+        
+        try:
+            now = datetime.now(self._tz)
+            datetime_hour = now.strftime("%Y-%m-%d %H:00")
             
             try:
-                cell = self._monitoring_sheet.find(today_str, in_column=1)
+                cell = self._monitoring_sheet.find(datetime_hour, in_column=1)
                 row_values = self._monitoring_sheet.row_values(cell.row)
                 
                 return {
-                    "date": row_values[0] if len(row_values) > 0 else "",
+                    "datetime_hour": row_values[0] if len(row_values) > 0 else "",
                     "total_predictions": int(row_values[1]) if len(row_values) > 1 else 0,
                     "avg_confidence": float(row_values[2]) if len(row_values) > 2 else 0.0,
                     "auto_count": int(row_values[3]) if len(row_values) > 3 else 0,
@@ -231,7 +339,7 @@ class MLTrackingClient:
                 return {}
                 
         except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to get today stats: %s", exc)
+            _LOGGER.exception("Failed to get current hour stats: %s", exc)
             return {}
     
     def get_realtime_stats(self) -> dict:
@@ -247,12 +355,12 @@ class MLTrackingClient:
             if len(all_data) <= 1:
                 return {}
             
-            # Simple 6-column structure:
-            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
+            # 7-column structure:
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status, 6=created_at
             total_predictions = len(all_data) - 1  # exclude header
             confidence_sum = 0.0
-            auto_count = 0      # >= 80%
-            high_count = 0      # 70-80%
+            auto_count = 0      # >= 90%
+            high_count = 0      # 70-90%
             medium_count = 0    # 50-70%
             manual_count = 0    # < 50%
             reviewed_count = 0
@@ -267,8 +375,8 @@ class MLTrackingClient:
                     confidence = float(row[4]) if row[4] else 0.0
                     confidence_sum += confidence
                     
-                    # Count by confidence level (matching threshold in classifier.py)
-                    if confidence >= 0.80:
+                    # Count by confidence level
+                    if confidence >= 0.90:
                         auto_count += 1
                     elif confidence >= 0.70:
                         high_count += 1
@@ -567,37 +675,48 @@ class MLTrackingClient:
             _LOGGER.exception("Failed to mark rows as trained: %s", exc)
             return 0
 
-    def calculate_and_update_daily_stats(self, model_version: str = "unknown") -> dict:
+    def calculate_and_update_hourly_stats(self, model_version: str = "unknown") -> dict:
         """
-        Hitung stats dari ML_Tracking sheet dan update ke Monitoring sheet.
+        Hitung stats per jam dari ML_Tracking sheet dan update ke Monitoring sheet.
+        Only counts rows from the current hour based on created_at column.
         
         Returns:
-            dict dengan stats
+            dict dengan stats untuk jam ini
         """
         if not self._tracking_sheet:
             _LOGGER.warning("Tracking sheet not connected, cannot calculate stats")
             return {}
         
         try:
-            today = date.today()
-            today_str = today.isoformat()
+            now = datetime.now(self._tz)
+            datetime_hour = now.strftime("%Y-%m-%d %H:00")
+            hour_prefix = now.strftime("%Y-%m-%d %H:")  # For matching "2026-01-23 14:XX"
             
             all_data = self._tracking_sheet.get_all_values()
             if len(all_data) <= 1:
                 _LOGGER.info("No data in ML_Tracking to calculate stats")
                 return {}
             
-            # Simple 6-column structure:
-            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status
-            total_predictions = len(all_data) - 1  # exclude header
+            # 7-column structure:
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status, 6=created_at
+            total_predictions = 0
             confidence_sum = 0.0
             auto_count = 0
+            high_count = 0
+            medium_count = 0
             pending_count = 0
             reviewed_count = 0
             
             for row in all_data[1:]:
-                if len(row) < 6:
+                if len(row) < 7:
                     continue
+                
+                # Filter by current hour using created_at (index 6)
+                created_at = row[6] if len(row) > 6 else ""
+                if not created_at.startswith(hour_prefix):
+                    continue
+                
+                total_predictions += 1
                 
                 # Confidence (index 4)
                 try:
@@ -607,27 +726,33 @@ class MLTrackingClient:
                     # Count by confidence level
                     if confidence >= 0.90:
                         auto_count += 1
+                    elif confidence >= 0.70:
+                        high_count += 1
+                    elif confidence >= 0.50:
+                        medium_count += 1
                 except ValueError:
                     pass
                 
                 # Review status (index 5)
                 review_status = row[5]
-                if review_status == "auto_approved":
-                    pass  # already counted in auto_count
-                elif review_status == "pending":
+                if review_status == "pending":
                     pending_count += 1
-                elif review_status in ("APPROVED", "CORRECTED", "TRAINED"):
+                elif review_status in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
                     reviewed_count += 1
             
-            avg_confidence = confidence_sum / total_predictions if total_predictions > 0 else 0.0
+            if total_predictions == 0:
+                _LOGGER.debug("No predictions for hour %s", datetime_hour)
+                return {}
+            
+            avg_confidence = confidence_sum / total_predictions
             
             stats = {
-                "date": today_str,
+                "datetime_hour": datetime_hour,
                 "total_predictions": total_predictions,
                 "avg_confidence": avg_confidence,
                 "auto_count": auto_count,
-                "high_count": 0,
-                "medium_count": 0,
+                "high_count": high_count,
+                "medium_count": medium_count,
                 "manual_count": pending_count,
                 "reviewed_count": reviewed_count,
                 "accuracy": reviewed_count / total_predictions if total_predictions > 0 else 0.0,
@@ -635,25 +760,31 @@ class MLTrackingClient:
             }
             
             # Update Monitoring sheet
-            self.update_daily_stats(
+            self.update_hourly_stats(
+                datetime_hour=datetime_hour,
                 model_version=model_version,
                 total_predictions=total_predictions,
                 avg_confidence=avg_confidence * 100,
                 auto_count=auto_count,
-                high_count=0,
-                medium_count=0,
+                high_count=high_count,
+                medium_count=medium_count,
                 manual_count=pending_count,
                 reviewed_count=reviewed_count,
                 accuracy=stats["accuracy"] * 100,
             )
             
             _LOGGER.info(
-                "Daily stats updated: %d predictions, %.1f%% avg confidence, %d reviewed",
-                total_predictions, avg_confidence * 100, reviewed_count
+                "Hourly stats updated for %s: %d predictions, %.1f%% avg confidence",
+                datetime_hour, total_predictions, avg_confidence * 100
             )
             
             return stats
             
         except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to calculate daily stats: %s", exc)
+            _LOGGER.exception("Failed to calculate hourly stats: %s", exc)
             return {}
+    
+    # Backward compatibility alias
+    def calculate_and_update_daily_stats(self, model_version: str = "unknown") -> dict:
+        """Backward compatibility - now calculates hourly stats."""
+        return self.calculate_and_update_hourly_stats(model_version)
