@@ -32,10 +32,10 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 # Confidence thresholds
-THRESHOLD_AUTO = 0.90        # >= 90% = AUTO (langsung pakai)
-THRESHOLD_HIGH = 0.85        # 85-90% = HIGH_REVIEW
-THRESHOLD_MEDIUM = 0.70      # 70-85% = MEDIUM_REVIEW
-                             # < 70% = MANUAL
+THRESHOLD_AUTO = 0.80        # >= 80% = AUTO (langsung pakai, isi Symtomps)
+THRESHOLD_HIGH = 0.70        # 70-80% = HIGH_REVIEW
+THRESHOLD_MEDIUM = 0.50      # 50-70% = MEDIUM_REVIEW
+                             # < 50% = MANUAL
 
 
 @dataclass

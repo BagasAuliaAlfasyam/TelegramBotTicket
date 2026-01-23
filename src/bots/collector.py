@@ -308,9 +308,15 @@ class OpsCollector:
         if self._ml_classifier and self._ml_classifier.is_loaded and not is_ack:
             solving_text = parsed["solving"] if parsed else ""
             ml_prediction = self._ml_classifier.predict(tech_raw_text, solving_text)
-            symtomps_label = ml_prediction.predicted_symtomps
             
-            # Log ke ML_Tracking untuk audit trail
+            # Hanya isi Symtomps jika confidence >= 80% (AUTO status)
+            # Pending (confidence < 80%) tetap log ke Logs tapi Symtomps kosong
+            if ml_prediction.prediction_status == "AUTO":
+                symtomps_label = ml_prediction.predicted_symtomps
+            else:
+                symtomps_label = ""  # Kosongkan untuk review manual
+            
+            # Log ke ML_Tracking untuk audit trail (semua prediksi)
             if self._ml_tracking:
                 self._ml_tracking.log_prediction(
                     tech_message_id=int(tech_message_id_str),
@@ -320,10 +326,11 @@ class OpsCollector:
                 )
             
             _LOGGER.info(
-                "ML Prediction: %s (%.1f%%) - %s",
+                "ML Prediction: %s (%.1f%%) - %s -> Logs Symtomps: %s",
                 ml_prediction.predicted_symtomps,
                 ml_prediction.ml_confidence * 100,
-                ml_prediction.prediction_status
+                ml_prediction.prediction_status,
+                symtomps_label or "(empty - pending review)"
             )
         
         # Tambah kolom Symtomps ke row (kolom T, index 19)
