@@ -112,8 +112,8 @@ class Config:
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", ""),
             s3_bucket_name=os.getenv("AWS_S3_BUCKET", os.getenv("S3_BUCKET_NAME", "")),
             s3_region=os.getenv("AWS_S3_REGION", os.getenv("S3_REGION", "ap-southeast-1")),
-            s3_endpoint_url=os.getenv("S3_ENDPOINT_URL", ""),
-            s3_public_url=os.getenv("S3_PUBLIC_URL", ""),
+            s3_endpoint_url=os.getenv("AWS_S3_ENDPOINT", os.getenv("S3_ENDPOINT_URL", "")),
+            s3_public_url=os.getenv("AWS_S3_PUBLIC_BASE_URL", os.getenv("S3_PUBLIC_URL", "")),
             model_dir=Path(os.getenv("MODEL_DIR", "models")),
             model_version=os.getenv("MODEL_VERSION", "auto"),  # auto = read current_version.txt
             threshold_auto=float(os.getenv("ML_THRESHOLD_AUTO", "0.90")),
