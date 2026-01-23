@@ -109,8 +109,9 @@ class MLTrackingClient:
         """
         Log prediksi ke ML_Tracking sheet.
         
-        Only logs predictions that need review (HIGH, MEDIUM, MANUAL).
-        AUTO predictions are not logged since they don't need review.
+        All predictions are logged:
+        - AUTO: review_status = "auto_approved" (no review needed)
+        - HIGH/MEDIUM/MANUAL: review_status = "pending" (needs review)
         
         Args:
             tech_message_id: Telegram message ID dari teknisi
@@ -122,10 +123,11 @@ class MLTrackingClient:
             _LOGGER.warning("Tracking sheet not connected, skipping log")
             return
         
-        # Skip AUTO predictions - they don't need review
+        # AUTO predictions are auto-approved, others need review
         if prediction_result.prediction_status == "AUTO":
-            _LOGGER.debug("Skipping ML_Tracking for AUTO prediction (message %s)", tech_message_id)
-            return
+            review_status = "auto_approved"
+        else:
+            review_status = "pending"
         
         try:
             now = datetime.now(self._tz)
@@ -139,7 +141,7 @@ class MLTrackingClient:
                 "realtime",                                         # source (realtime vs batch)
                 prediction_result.ml_confidence,                    # ml_confidence
                 prediction_result.prediction_status,                # prediction_status
-                "pending",                                          # review_status
+                review_status,                                      # review_status
                 "",                                                 # logs_row_number (optional)
             ]
             
