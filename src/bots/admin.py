@@ -888,7 +888,7 @@ class AdminCommandHandler:
                 f"  🔴 MANUAL (Critical): {manual}\n"
                 f"  🔶 HIGH REVIEW: {high}\n"
                 f"  🟡 MEDIUM REVIEW: {medium}\n\n"
-                f"Use Google Sheets to review and correct predictions."
+                f"📝 [Open Google Sheets to Review](https://docs.google.com/spreadsheets/d/1rGvoDwBFA038N2jIYoFCcndFAFs9m9lDJ4YfMtZ6Ugs/edit?usp=sharing)"
             )
             
             await update.message.reply_text(message, parse_mode="Markdown")
@@ -1019,14 +1019,10 @@ class AdminCommandHandler:
                 
                 # Check for new classes (not in current model)
                 new_classes = []
-                if self._ml_classifier and hasattr(self._ml_classifier, '_label_encoder'):
-                    le = self._ml_classifier._label_encoder
-                    if le is not None:
-                        if isinstance(le, dict):
-                            existing = set(le.values())
-                        else:
-                            existing = set(le.classes_)
-                        new_classes = [(c, n) for c, n in sorted_classes if c not in existing]
+                if self._ml_classifier:
+                    metadata = self._ml_classifier.get_metadata()
+                    existing = set(metadata.get('classes', []))
+                    new_classes = [(c, n) for c, n in sorted_classes if c not in existing]
                 
                 message += "**Class Distribution (New Data):**\n"
                 for cls, count in sorted_classes[:10]:  # Top 10
@@ -1235,9 +1231,21 @@ class AdminCommandHandler:
                         elif "SUCCESS" in line_text or "Complete" in line_text:
                             current_status = "✅ Complete!"
             
-            # Wait for process to complete (no timeout)
-            await read_output()
-            await process.wait()
+            # Wait for process to complete with 3-hour timeout
+            RETRAIN_TIMEOUT = 3 * 60 * 60  # 3 hours in seconds
+            try:
+                await read_output()
+                await asyncio.wait_for(process.wait(), timeout=RETRAIN_TIMEOUT)
+            except asyncio.TimeoutError:
+                process.kill()
+                progress_task.cancel()
+                await update.message.reply_text(
+                    "❌ **Retrain Timeout!**\n\n"
+                    "Training exceeded 3 hours and was terminated.\n"
+                    "This may indicate a problem with the training data or server resources.",
+                    parse_mode="Markdown"
+                )
+                return
             progress_task.cancel()
             
             # Get full output

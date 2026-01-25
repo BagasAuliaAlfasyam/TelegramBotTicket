@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import pickle
 import re
 import sys
@@ -241,6 +242,7 @@ class ModelRetrainer:
         
         # Stats
         self.metrics = {}
+        self.training_samples = 0  # Will be set in run()
         self.new_version = self._get_next_version()
     
     def _get_next_version(self) -> str:
@@ -624,9 +626,10 @@ class ModelRetrainer:
         self.model = lgb.LGBMClassifier(**OPTIMAL_LGBM_PARAMS)
         
         # Cross-validation for metrics
-        # Note: n_jobs=1 to avoid multiprocessing issues on Windows/Python 3.13
+        # Auto-detect OS: use parallel on Linux, sequential on Windows
+        cv_n_jobs = 1 if os.name == 'nt' else -1
         cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-        y_pred_cv = cross_val_predict(self.model, X, y, cv=cv, n_jobs=1)
+        y_pred_cv = cross_val_predict(self.model, X, y, cv=cv, n_jobs=cv_n_jobs)
         
         macro_f1 = f1_score(y, y_pred_cv, average='macro')
         weighted_f1 = f1_score(y, y_pred_cv, average='weighted')
@@ -710,17 +713,29 @@ class ModelRetrainer:
         _LOGGER.info(f"  ✅ preprocessor.pkl")
         
         # Save metadata
+        # Import thresholds from classifier for consistency
+        from src.ml.classifier import THRESHOLD_AUTO, THRESHOLD_HIGH, THRESHOLD_MEDIUM
+        
+        now = datetime.now()
         metadata = {
             'version': version,
-            'created_at': datetime.now().isoformat(),
+            'created_at': now.isoformat(),
+            'trained_at': now.strftime('%Y-%m-%d %H:%M:%S'),  # For /modelstatus
             'classes': list(self.label_encoder.classes_),
             'n_classes': len(self.label_encoder.classes_),
+            'num_classes': len(self.label_encoder.classes_),  # Alias for /modelstatus
+            'training_samples': self.training_samples,  # For /modelstatus
+            'training_accuracy': self.metrics.get('weighted_f1', 0) * 100,  # For /modelstatus
             'features': {
                 'word_tfidf': self.word_tfidf.get_feature_names_out().shape[0],
                 'char_tfidf': self.char_tfidf.get_feature_names_out().shape[0],
             },
             'metrics': self.metrics,
             'lgbm_params': OPTIMAL_LGBM_PARAMS,
+            # Thresholds from classifier module
+            'threshold_auto': THRESHOLD_AUTO,
+            'threshold_high': THRESHOLD_HIGH,
+            'threshold_medium': THRESHOLD_MEDIUM,
         }
         metadata_path = version_dir / "metadata.json"
         with open(metadata_path, 'w', encoding='utf-8') as f:
@@ -778,6 +793,7 @@ class ModelRetrainer:
         
         # 1. Load data
         df = self.load_training_data()
+        self.training_samples = len(df)  # Store for metadata
         
         # 2. Preprocess
         X, y = self.preprocess(df)
@@ -835,9 +851,11 @@ def check_retrain_threshold(config: Config, threshold: int = 100) -> tuple[bool,
             return False, 0
         
         # Simple 6-column: review_status is at index 5
+        # Only count APPROVED + CORRECTED as "ready for training"
+        # TRAINED = already used, auto_approved = not human-verified
         reviewed_count = sum(
             1 for row in data[1:] 
-            if len(row) > 5 and row[5] in ('APPROVED', 'CORRECTED', 'auto_approved', 'TRAINED')
+            if len(row) > 5 and row[5] in ('APPROVED', 'CORRECTED')
         )
         
         should_retrain = reviewed_count >= threshold
