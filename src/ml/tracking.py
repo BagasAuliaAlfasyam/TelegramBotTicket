@@ -57,7 +57,7 @@ class MLTrackingClient:
             self._tracking_sheet = self._get_or_create_sheet(
                 ML_TRACKING_SHEET,
                 headers=[
-                    "tech_message_id", "tech_raw_text", "solving",
+                    "tech message id", "tech raw text", "solving",
                     "Symtomps", "ml_confidence", "review_status", "created_at"
                 ]
             )

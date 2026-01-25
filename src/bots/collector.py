@@ -332,6 +332,13 @@ class OpsCollector:
                 ml_prediction.prediction_status,
                 symtomps_label or "(empty - below 80%)"
             )
+            
+            # Update notify_text dengan hasil prediksi ML
+            confidence_pct = ml_prediction.ml_confidence * 100
+            if ml_prediction.ml_confidence >= 0.80:
+                notify_text += f"\n\n🤖 Symtomps: **{ml_prediction.predicted_symtomps}** ({confidence_pct:.0f}%)"
+            else:
+                notify_text += f"\n\n🤖 Symtomps: **{ml_prediction.predicted_symtomps}** ({confidence_pct:.0f}%) ⚠️ _perlu review_"
         
         # Tambah kolom Symtomps ke row (kolom T, index 19)
         if row is not None:

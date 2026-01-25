@@ -396,7 +396,7 @@ class ModelRetrainer:
         
         # Keep only needed columns
         cols_to_keep = []
-        for col in ['tech_message_id', 'tech raw text', 'tech_raw_text', 'solving', 'Symtomps']:
+        for col in ['tech message id', 'tech raw text', 'tech_raw_text', 'solving', 'Symtomps']:
             if col in df.columns:
                 cols_to_keep.append(col)
         
@@ -478,8 +478,9 @@ class ModelRetrainer:
             _LOGGER.warning("  review_status column not found - using all data")
         
         # Select only training columns (simple structure)
+        # Support both underscore and space format for compatibility
         training_cols = []
-        for col in ['tech_message_id', 'tech_raw_text', 'solving', 'Symtomps']:
+        for col in ['tech_message_id', 'tech message id', 'tech_raw_text', 'tech raw text', 'solving', 'Symtomps']:
             if col in df.columns:
                 training_cols.append(col)
         
