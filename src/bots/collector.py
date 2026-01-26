@@ -336,9 +336,9 @@ class OpsCollector:
             # Update notify_text dengan hasil prediksi ML
             confidence_pct = ml_prediction.ml_confidence * 100
             if ml_prediction.ml_confidence >= 0.80:
-                notify_text += f"\n\n🤖 Symtomps: **{ml_prediction.predicted_symtomps}** ({confidence_pct:.0f}%)"
+                notify_text += f"\n\n🤖 Symtomps: <b>{ml_prediction.predicted_symtomps}</b> ({confidence_pct:.0f}%)"
             else:
-                notify_text += f"\n\n🤖 Symtomps: **{ml_prediction.predicted_symtomps}** ({confidence_pct:.0f}%) ⚠️ _perlu review_"
+                notify_text += f"\n\n🤖 Symtomps: <b>{ml_prediction.predicted_symtomps}</b> ({confidence_pct:.0f}%) ⚠️ <i>perlu review</i>"
         
         # Tambah kolom Symtomps ke row (kolom T, index 19)
         if row is not None:
@@ -425,7 +425,7 @@ class OpsCollector:
                 text=text,
                 reply_to_message_id=reply_to_id,
                 disable_notification=False,
-                parse_mode="Markdown",
+                parse_mode="HTML",
             )
         except Exception:
             _LOGGER.warning("Reporting bot failed to send notification", exc_info=True)
