@@ -2,17 +2,23 @@
 """
 Retrain Script - Pipeline Compatible
 =====================================
-Script untuk retraining model ML yang match dengan notebook pipeline.
 
-Features:
-- Domain-aware preprocessing (ITSupportTextPreprocessor)
-- Word TF-IDF (1-3 n-grams) + Char TF-IDF (3-5 n-grams)
-- LightGBM with optimized params (from Optuna tuning)
-- Optional probability calibration
-- Incremental versioning (v2 → v3, etc.)
+Script untuk training ulang model ML klasifikasi Symtomps.
+Desain agar kompatibel dengan pipeline notebook Jupyter.
 
-Usage:
-    # Manual retrain dengan data baru dari Sheets
+Fitur Utama:
+    - Domain-aware preprocessing (ITSupportTextPreprocessor)
+    - Word TF-IDF (1-3 n-grams) + Char TF-IDF (3-5 n-grams)
+    - LightGBM dengan params optimal (dari Optuna tuning)
+    - Optional probability calibration (isotonic)
+    - Incremental versioning (v1 → v2 → v3, dst)
+
+Sumber Data Training:
+    1. Logs sheet - baris yang kolom Symtomps terisi
+    2. ML_Tracking sheet - baris dengan status APPROVED/CORRECTED
+
+Penggunaan:
+    # Retrain manual dengan data baru dari Sheets
     python scripts/retrain.py
     
     # Dengan threshold check (hanya retrain jika reviewed >= 100)
@@ -21,14 +27,16 @@ Usage:
     # Force retrain (skip threshold check)
     python scripts/retrain.py --force
 
-Pipeline Flow:
-    1. Load Master data + Reviewed data dari ML_Tracking (jika ada)
+Flow Pipeline:
+    1. Load data dari Logs + ML_Tracking
     2. Preprocess dengan ITSupportTextPreprocessor
-    3. TF-IDF Vectorization (word 1-3gram + char 3-5gram)
+    3. TF-IDF Vectorization (word + char n-grams)
     4. Train LightGBM dengan params optimal
-    5. Calibration (optional)
-    6. Export artifacts ke models/
-    7. Notify admin via Telegram (optional)
+    5. Calibration isotonic (optional)
+    6. Export artifacts ke folder models/vX/
+    7. Update current_version.txt
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -92,7 +100,26 @@ _LOGGER = logging.getLogger(__name__)
 # =============================================================================
 
 class ITSupportTextPreprocessor(BaseEstimator, TransformerMixin):
-    """Domain-aware text preprocessor for IT support tickets."""
+    """
+    Text preprocessor khusus untuk tiket IT support.
+    
+    Kelas ini melakukan preprocessing teks yang domain-aware:
+        - Expand singkatan umum (yg → yang, tdk → tidak, dll)
+        - Preserve istilah IT penting (OTP, login, modem, dll)
+        - Normalize username, NIK, ticket ID menjadi placeholder
+        - Merge teks teknisi + solving dengan separator [SEP]
+    
+    Attributes:
+        ABBREVIATIONS: Dict mapping singkatan → bentuk lengkap
+        IT_TERMS: Set istilah IT yang harus dipreserve
+        merge_columns: Apakah gabung tech raw text + solving
+        text_col: Nama kolom teks utama
+        solving_col: Nama kolom solving
+    
+    Contoh:
+        >>> preprocessor = ITSupportTextPreprocessor()
+        >>> preprocessor.transform(df)  # return array of cleaned texts
+    """
     
     ABBREVIATIONS = {
         'moban': 'mohon bantuan', 'tks': 'terima kasih', 'thx': 'terima kasih',
@@ -216,7 +243,34 @@ OPTIMAL_LGBM_PARAMS = {
 
 class ModelRetrainer:
     """
-    Retrainer yang match dengan notebook pipeline.
+    Kelas utama untuk retraining model ML.
+    
+    Menangani seluruh pipeline retraining mulai dari load data,
+    preprocessing, training, hingga save artifacts.
+    
+    Attributes:
+        config: Konfigurasi aplikasi
+        master_data_path: Path ke master data CSV (optional)
+        output_dir: Direktori output untuk model (default: models/)
+        preprocessor: Instance ITSupportTextPreprocessor
+        word_tfidf: TF-IDF vectorizer untuk word n-grams
+        char_tfidf: TF-IDF vectorizer untuk char n-grams
+        label_encoder: Encoder untuk label/target
+        model: Model LightGBM
+        calibrated_model: Model setelah probability calibration
+        metrics: Dict metrik evaluasi (F1 score, dll)
+        training_samples: Jumlah sampel training
+        new_version: Versi model yang akan dibuat (v1, v2, dst)
+    
+    Struktur Output:
+        models/
+        ├── v3/
+        │   ├── lgb_model.txt
+        │   ├── tfidf_vectorizer.pkl
+        │   ├── label_encoder.pkl
+        │   ├── preprocessor.pkl
+        │   └── metadata.json
+        └── current_version.txt
     """
     
     def __init__(
@@ -247,13 +301,16 @@ class ModelRetrainer:
     
     def _get_next_version(self) -> str:
         """
-        Get next version number.
+        Dapatkan nomor versi berikutnya untuk model baru.
         
-        Logic:
-        1. Check current_version.txt (if exists)
-        2. Check versions.json (if exists)
-        3. Check existing version folders (v1, v2, v3...)
-        4. If nothing found, start with v1
+        Logika pencarian versi saat ini:
+            1. Cek current_version.txt (jika ada)
+            2. Cek versions.json (jika ada)
+            3. Cek folder versi yang sudah ada (v1, v2, v3...)
+            4. Jika tidak ada, mulai dengan v1
+        
+        Returns:
+            str: Versi baru dalam format "vN" (contoh: v1, v2, v3)
         """
         # Method 1: Check current_version.txt
         current_version_file = self.output_dir / "current_version.txt"
@@ -294,10 +351,26 @@ class ModelRetrainer:
     
     def load_training_data(self) -> pd.DataFrame:
         """
-        Load training data from multiple sources:
-        1. Logs sheet - where Symtomps is filled (AUTO predictions + manual labels)
-        2. ML_Tracking sheet - APPROVED/CORRECTED/TRAINED reviews
+        Load data training dari berbagai sumber.
         
+        Sumber data:
+            1. Logs sheet - baris yang kolom Symtomps terisi
+               (AUTO predictions yang di-auto_approved + label manual)
+            2. ML_Tracking sheet - baris dengan status APPROVED/CORRECTED
+               (prediksi yang sudah di-review admin)
+        
+        Data dari kedua sumber akan di-merge dan di-deduplicate
+        berdasarkan tech_message_id.
+        
+        Returns:
+            pd.DataFrame: DataFrame dengan kolom:
+                - tech raw text: Teks dari teknisi
+                - solving: Teks solving dari ops
+                - Symtomps: Label target
+        
+        Raises:
+            ValueError: Jika tidak ada data training yang ditemukan
+        """
         Combines both and deduplicates by tech_message_id.
         """
         _LOGGER.info("Loading training data...")
@@ -352,7 +425,17 @@ class ModelRetrainer:
         return df
     
     def _load_from_logs(self) -> Optional[pd.DataFrame]:
-        """Load training data from Logs sheet where Symtomps is filled."""
+        """
+        Load data training dari Logs sheet.
+        
+        Hanya mengambil baris yang kolom Symtomps sudah terisi.
+        Ini termasuk:
+            - Prediksi AUTO yang sudah di-write ke sheet
+            - Label manual yang diisi langsung di sheet
+        
+        Returns:
+            pd.DataFrame atau None jika gagal/tidak ada data
+        """
         if not HAS_GSPREAD:
             return None
         
@@ -406,7 +489,22 @@ class ModelRetrainer:
         return df[cols_to_keep]
     
     def _load_from_ml_tracking(self) -> Optional[pd.DataFrame]:
-        """Load training data from ML_Tracking sheet."""
+        """
+        Load data training dari ML_Tracking sheet.
+        
+        Hanya mengambil baris dengan review_status:
+            - APPROVED: Prediksi ML yang dikonfirmasi benar
+            - CORRECTED: Prediksi ML yang dikoreksi admin
+            - TRAINED: Data yang sudah pernah ditraining (opsional)
+        
+        Kolom yang diambil:
+            - tech raw text / tech_raw_text
+            - solving
+            - Symtomps (bisa dari kolom Symtomps langsung)
+        
+        Returns:
+            pd.DataFrame atau None jika gagal/tidak ada data
+        """
         if not HAS_GSPREAD:
             return None
         
@@ -492,12 +590,26 @@ class ModelRetrainer:
     
     def _normalize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Normalize column names and clean data.
+        Normalisasi nama kolom dan bersihkan data.
         
-        IMPORTANT: Data dari gspread (Google Sheets) tidak memiliki NaN!
-        - Cell kosong menjadi empty string ''
-        - df.info() tidak akan menunjukkan null
-        - Perlu convert empty string → NaN untuk konsistensi
+        PENTING: Data dari gspread (Google Sheets) tidak memiliki NaN!
+            - Cell kosong menjadi empty string ''
+            - df.info() tidak akan menunjukkan null
+            - Perlu convert empty string → NaN untuk konsistensi
+        
+        Proses:
+            1. Rename kolom jika perlu (tech_raw_text → tech raw text)
+            2. Pastikan kolom required ada (tech raw text, Symtomps)
+            3. Convert empty strings ke NaN
+            4. Drop baris dengan solving kosong
+            5. Drop baris dengan Symtomps kosong
+            6. Apply label mapping untuk merge kategori serupa
+        
+        Args:
+            df: DataFrame mentah dari load
+            
+        Returns:
+            pd.DataFrame: DataFrame yang sudah dinormalisasi dan dibersihkan
         """
         # Rename columns if needed
         column_mapping = {
@@ -570,7 +682,24 @@ class ModelRetrainer:
         return df
     
     def preprocess(self, df: pd.DataFrame) -> tuple:
-        """Preprocess and vectorize data."""
+        """
+        Preprocess dan vektorisasi data untuk training.
+        
+        Tahapan:
+            1. Text preprocessing dengan ITSupportTextPreprocessor
+            2. Label encoding untuk target (Symtomps → integer)
+            3. TF-IDF Word vectorization (1-3 n-grams)
+            4. TF-IDF Char vectorization (3-5 n-grams)
+            5. Gabung word + char features (sparse matrix)
+        
+        Args:
+            df: DataFrame dengan kolom 'tech raw text', 'solving', 'Symtomps'
+            
+        Returns:
+            tuple: (X, y) dimana:
+                - X: Sparse matrix features TF-IDF
+                - y: Array label yang sudah di-encode
+        """
         _LOGGER.info("Preprocessing...")
         
         # 1. Text preprocessing
@@ -617,7 +746,25 @@ class ModelRetrainer:
         return X, y
     
     def train(self, X, y, calibrate: bool = True) -> None:
-        """Train LightGBM model."""
+        """
+        Training model LightGBM dengan data yang sudah dipreprocess.
+        
+        Proses:
+            1. Buat model LightGBM dengan params optimal
+            2. Cross-validation 5-fold untuk evaluasi metrics
+            3. Fit model pada full data
+            4. Calibration isotonic (optional, untuk probability yang lebih akurat)
+        
+        Args:
+            X: Sparse matrix features dari preprocess()
+            y: Array label yang sudah di-encode
+            calibrate: Apakah lakukan probability calibration (default True)
+        
+        Note:
+            - Metrics (macro F1, weighted F1) disimpan di self.metrics
+            - Model disimpan di self.model dan self.calibrated_model
+            - Pada Windows, CV menggunakan n_jobs=1 (sequential)
+        """
         if not HAS_LIGHTGBM:
             raise ImportError("LightGBM is required for training")
         
@@ -666,17 +813,21 @@ class ModelRetrainer:
     
     def save_artifacts(self) -> Path:
         """
-        Save all model artifacts to versioned folder.
+        Simpan semua artifacts model ke folder berversi.
         
-        Structure:
+        Struktur output:
             models/
-            ├── v3/
-            │   ├── lgb_model.txt
-            │   ├── tfidf_vectorizer.pkl
-            │   ├── label_encoder.pkl
-            │   ├── preprocessor.pkl
-            │   └── metadata.json
-            └── current_version.txt
+            ├── vX/
+            │   ├── lgb_model.txt       - Model LightGBM (text format)
+            │   ├── tfidf_vectorizer.pkl - Word + Char TF-IDF vectorizers
+            │   ├── label_encoder.pkl    - Label encoder untuk Symtomps
+            │   ├── preprocessor.pkl     - Text preprocessor
+            │   └── metadata.json        - Info versi, metrics, threshold
+            ├── current_version.txt   - File pointer ke versi aktif
+            └── versions.json         - History semua versi
+        
+        Returns:
+            Path: Path ke folder versi yang baru dibuat
         """
         version = self.new_version
         
@@ -755,7 +906,16 @@ class ModelRetrainer:
         return version_dir
     
     def _update_versions_history(self, version: str, metadata: dict) -> None:
-        """Update versions.json with new version info."""
+        """
+        Update versions.json dengan info versi baru.
+        
+        File versions.json menyimpan history semua versi model yang pernah
+        dibuat, termasuk waktu pembuatan dan metrics.
+        
+        Args:
+            version: Nama versi (contoh: "v3")
+            metadata: Dict metadata termasuk created_at, n_classes, metrics
+        """
         versions_file = self.output_dir / "versions.json"
         
         if versions_file.exists():
@@ -785,7 +945,25 @@ class ModelRetrainer:
         _LOGGER.info(f"  ✅ versions.json updated")
     
     def run(self, calibrate: bool = True) -> dict:
-        """Run full retraining pipeline."""
+        """
+        Jalankan full pipeline retraining.
+        
+        Urutan eksekusi:
+            1. Load data dari Logs + ML_Tracking
+            2. Preprocess dan vektorisasi
+            3. Training LightGBM + calibration
+            4. Save artifacts ke folder berversi
+        
+        Args:
+            calibrate: Apakah lakukan probability calibration
+            
+        Returns:
+            dict dengan keys:
+                - version: Nama versi baru (contoh: "v3")
+                - classes: Jumlah kelas/kategori
+                - metrics: Dict F1 scores
+                - duration_seconds: Waktu eksekusi
+        """
         _LOGGER.info("="*60)
         _LOGGER.info(f"RETRAINING PIPELINE - Target Version: {self.new_version}")
         _LOGGER.info("="*60)
@@ -831,10 +1009,19 @@ class ModelRetrainer:
 
 def check_retrain_threshold(config: Config, threshold: int = 100) -> tuple[bool, int]:
     """
-    Check apakah reviewed data sudah mencapai threshold.
+    Cek apakah data yang sudah di-review mencapai threshold.
     
+    Mengecek ML_Tracking sheet dan menghitung baris dengan status
+    APPROVED atau CORRECTED (bukan TRAINED atau auto_approved).
+    
+    Args:
+        config: Konfigurasi aplikasi
+        threshold: Minimal jumlah data reviewed untuk retrain (default 100)
+        
     Returns:
-        (should_retrain, reviewed_count)
+        tuple: (should_retrain, reviewed_count)
+            - should_retrain: True jika reviewed_count >= threshold
+            - reviewed_count: Jumlah data APPROVED + CORRECTED
     """
     if not HAS_GSPREAD:
         _LOGGER.warning("gspread not available, cannot check threshold")

@@ -1,7 +1,17 @@
 """
 Message Parsers
 ================
-Utilities for parsing Ops messages from Telegram chats.
+
+Utilitas untuk parsing pesan Ops dari chat Telegram.
+
+Format pesan Ops yang diharapkan:
+    "solving text, APP -initials"
+    
+Contoh:
+    "Done reset MFA, MIT -bg"
+    "Done Reset password Default, MIS -dvd"
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -19,15 +29,22 @@ def parse_ops_message(
     allowed_apps: Collection[str]
 ) -> Optional[dict[str, str]]:
     """
-    Parse an Ops reply following the "solving, APP -xx" pattern.
-
+    Parse reply Ops dengan format "solving, APP -xx".
+    
+    Fungsi ini mengekstrak informasi dari pesan Ops yang mengikuti
+    format standar: solving text diikuti kode aplikasi dan inisial.
+    
     Args:
-        text: Raw message text from the Ops member.
-        allowed_apps: Collection of app codes that are considered valid.
-
+        text: Teks mentah dari pesan member Ops
+        allowed_apps: Collection kode aplikasi yang valid (MIT, MIS, dll)
+    
     Returns:
-        Dict with keys "solving", "app", and "initials" if the text matches
-        the expected structure and contains an allowed app; otherwise None.
+        Dict dengan keys "solving", "app", "initials" jika match,
+        None jika format tidak sesuai atau app tidak diizinkan.
+    
+    Contoh:
+        >>> parse_ops_message("Reset password, MIT -bg", ["MIT", "MIS"])
+        {"solving": "Reset password", "app": "MIT", "initials": "-bg"}
     """
     if not text:
         return None

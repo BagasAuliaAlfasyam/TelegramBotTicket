@@ -1,8 +1,18 @@
 """
 Text Preprocessing Module for IT Support Tickets
 =================================================
-Domain-aware text preprocessing for Indonesian IT support tickets.
-Consistent preprocessing for both inference and training.
+
+Modul preprocessing teks khusus untuk tiket IT support Indonesia.
+Menyediakan preprocessing yang konsisten untuk inference dan training.
+
+Fitur Utama:
+    - Preserve istilah IT (OTP, TOTP, WO, SC, dll)
+    - Expand singkatan umum (moban → mohon bantuan)
+    - Handle code-switching Indonesia + English IT terms
+    - Smart merge teks teknisi + solving dengan [SEP] separator
+    - Normalisasi kode tiket, NIK, nomor telepon
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -15,13 +25,23 @@ import pandas as pd
 
 class ITSupportTextPreprocessor:
     """
-    Domain-aware text preprocessor for IT support tickets.
+    Preprocessor teks khusus untuk tiket IT support.
     
-    Key design decisions:
-    1. Preserve IT-specific terms (OTP, TOTP, WO, SC, etc.)
-    2. Normalize common abbreviations (moban -> mohon bantuan)
-    3. Handle code-switched text (Indonesian + English IT terms)
-    4. Smart merge of tech_raw_text + solving columns
+    Keputusan desain utama:
+        1. Preserve istilah IT penting (OTP, TOTP, WO, SC, modem, dll)
+        2. Normalisasi singkatan umum (moban → mohon bantuan)
+        3. Handle code-switching Indonesia + English IT terms
+        4. Smart merge tech_raw_text + solving dengan separator [SEP]
+    
+    Attributes:
+        ABBREVIATIONS: Dict mapping singkatan → bentuk lengkap
+        IT_TERMS: Set istilah IT yang harus dipertahankan
+        use_separator: Apakah gunakan [SEP] token sebagai pemisah
+    
+    Contoh:
+        >>> preprocessor = ITSupportTextPreprocessor()
+        >>> preprocessor.preprocess("moban reset pwd", "sudah reset")
+        "mohon bantuan reset password [SEP] sudah reset"
     """
     
     # Domain-specific abbreviation mappings
@@ -72,23 +92,29 @@ class ITSupportTextPreprocessor:
     
     def __init__(self, use_separator: bool = True):
         """
-        Initialize preprocessor.
+        Inisialisasi preprocessor.
         
         Args:
-            use_separator: Whether to use [SEP] token between tech_text and solving
+            use_separator: Apakah gunakan token [SEP] antara tech_text dan solving.
+                          Default True untuk memberikan signal batas antar bagian.
         """
         self.use_separator = use_separator
     
     def preprocess(self, tech_raw_text: str, solving: str = "") -> str:
         """
-        Preprocess and merge text columns.
+        Preprocess dan merge kolom teks.
+        
+        Proses:
+            1. Bersihkan kedua teks dengan _clean_text()
+            2. Gabungkan dengan separator [SEP] jika use_separator=True
+            3. Handle kasus salah satu teks kosong
         
         Args:
-            tech_raw_text: Raw text from technician
-            solving: Solving text from ops
-            
+            tech_raw_text: Teks mentah dari teknisi
+            solving: Teks solving dari ops (optional)
+        
         Returns:
-            Cleaned and merged text
+            str: Teks yang sudah dibersihkan dan digabung
         """
         # Clean both texts
         tech_text = self._clean_text(tech_raw_text)
@@ -109,13 +135,24 @@ class ITSupportTextPreprocessor:
     
     def _clean_text(self, text: str) -> str:
         """
-        Clean single text with domain-aware processing.
+        Bersihkan satu teks dengan processing domain-aware.
+        
+        Tahapan cleaning:
+            1. Remove URLs, mentions, emails
+            2. Preserve konten hashtag (hapus #)
+            3. Remove nomor telepon Indonesia (08xx, +62xx)
+            4. Normalisasi kode WO/SC ke placeholder
+            5. Normalisasi NIK/laborcode
+            6. Expand singkatan dari ABBREVIATIONS
+            7. Remove angka standalone
+            8. Remove special characters
+            9. Collapse whitespace
         
         Args:
-            text: Raw text to clean
-            
+            text: Teks mentah yang akan dibersihkan
+        
         Returns:
-            Cleaned text
+            str: Teks yang sudah dibersihkan
         """
         if not text or pd.isna(text) or str(text).lower() == 'nan':
             return ""
@@ -163,15 +200,18 @@ class ITSupportTextPreprocessor:
                          text_col: str = 'tech raw text',
                          solving_col: str = 'solving') -> np.ndarray:
         """
-        Batch preprocess a DataFrame.
+        Batch preprocess DataFrame.
+        
+        Memproses seluruh DataFrame sekaligus, lebih efisien untuk
+        training atau batch prediction.
         
         Args:
-            df: DataFrame with text columns
-            text_col: Name of tech text column
-            solving_col: Name of solving column
-            
+            df: DataFrame dengan kolom teks
+            text_col: Nama kolom teks teknisi (default: 'tech raw text')
+            solving_col: Nama kolom solving (default: 'solving')
+        
         Returns:
-            Array of preprocessed texts
+            np.ndarray: Array teks yang sudah dipreprocess
         """
         results = []
         for _, row in df.iterrows():
@@ -187,26 +227,32 @@ _preprocessor = ITSupportTextPreprocessor()
 
 def preprocess_text(tech_raw_text: str, solving: str = "") -> str:
     """
-    Convenience function to preprocess text.
+    Fungsi convenience untuk preprocess teks.
+    
+    Menggunakan singleton preprocessor untuk kemudahan.
+    Cocok untuk inference single text.
     
     Args:
-        tech_raw_text: Raw text from technician
-        solving: Solving text from ops
-        
+        tech_raw_text: Teks mentah dari teknisi
+        solving: Teks solving dari ops (optional)
+    
     Returns:
-        Preprocessed text
+        str: Teks yang sudah dipreprocess
     """
     return _preprocessor.preprocess(tech_raw_text, solving)
 
 
 def clean_text_simple(text: str) -> str:
     """
-    Simple text cleaning (for backward compatibility).
+    Cleaning teks sederhana (backward compatibility).
+    
+    Fungsi ini dipertahankan untuk kompatibilitas dengan kode lama
+    yang hanya membutuhkan cleaning tanpa merge.
     
     Args:
-        text: Text to clean
-        
+        text: Teks yang akan dibersihkan
+    
     Returns:
-        Cleaned text
+        str: Teks yang sudah dibersihkan
     """
     return _preprocessor._clean_text(text)

@@ -1,7 +1,25 @@
 """
 Admin Command Handlers
 =======================
-Telegram admin commands for ML monitoring and management.
+
+Modul ini berisi handler command Telegram untuk admin bot.
+Digunakan untuk monitoring performa ML dan management model.
+
+Command yang tersedia:
+    /stats - Statistik ML real-time
+    /report - Laporan performa ML (weekly/monthly)
+    /tiketreport - Laporan tiket & SLA
+    /trendbulan - Trend tiket bulanan per aplikasi (MIT/MIS)
+    /trendmingguan - Top 5 tiket per minggu
+    /modelstatus - Info model ML yang aktif
+    /pendingreview - Lihat item yang butuh review
+    /updatestats - Update statistik ke Monitoring sheet
+    /retrainstatus - Cek kesiapan retrain
+    /retrain - Training ulang model
+    /reloadmodel - Hot reload model tanpa restart
+    /help - Tampilkan bantuan
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -26,7 +44,21 @@ TZ = ZoneInfo("Asia/Jakarta")
 
 
 class AdminCommandHandler:
-    """Handler for admin commands related to ML monitoring."""
+    """
+    Handler untuk semua command admin terkait ML monitoring.
+    
+    Class ini menangani seluruh command admin yang tersedia di bot reporting.
+    Setiap method async mewakili satu command Telegram.
+    
+    Attributes:
+        _config: Konfigurasi aplikasi
+        _ml_classifier: Instance MLClassifier untuk prediksi dan info model
+        _ml_tracking: Instance MLTrackingClient untuk akses ML_Tracking sheet
+        _admin_chat_ids: List user ID yang diizinkan sebagai admin
+    
+    Note:
+        Jika _admin_chat_ids kosong, semua user diizinkan menggunakan command.
+    """
     
     def __init__(
         self,
@@ -41,14 +73,33 @@ class AdminCommandHandler:
         self._admin_chat_ids = admin_chat_ids or []
         
     def _is_admin(self, user_id: int) -> bool:
-        """Check if user is an admin."""
+        """
+        Cek apakah user memiliki akses admin.
+        
+        Args:
+            user_id: Telegram user ID yang akan dicek
+            
+        Returns:
+            True jika user adalah admin, False jika bukan
+            
+        Note:
+            Jika list admin kosong, semua user dianggap admin.
+        """
         if not self._admin_chat_ids:
             return True  # If no admin list, allow all
         return user_id in self._admin_chat_ids
     
     async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /stats - Show today's ML prediction statistics
+        /stats - Tampilkan statistik prediksi ML real-time.
+        
+        Menghitung statistik langsung dari ML_Tracking sheet:
+            - Total prediksi
+            - Rata-rata confidence
+            - Distribusi per kategori (AUTO/HIGH/MEDIUM/MANUAL)
+            - Status review (pending vs reviewed)
+        
+        Data dihitung real-time, bukan dari cache Monitoring sheet.
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -108,7 +159,21 @@ class AdminCommandHandler:
     
     async def report(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /report [weekly|monthly] - Generate ML performance report
+        /report [weekly|monthly] - Generate laporan performa ML.
+        
+        Menghasilkan laporan agregat dari Monitoring sheet dengan:
+            - Summary: total prediksi, avg confidence, automation rate
+            - Distribusi per kategori
+            - Quality metrics: reviewed count, accuracy
+            - Trend analysis: insights otomatis
+        
+        Args:
+            weekly: Laporan 7 hari terakhir (default)
+            monthly: Laporan 30 hari terakhir
+        
+        Contoh:
+            /report weekly
+            /report monthly
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -189,7 +254,20 @@ class AdminCommandHandler:
             await update.message.reply_text(f"❌ Error: {e}")
     
     def _analyze_trend(self, stats: dict) -> str:
-        """Analyze trends and generate insights."""
+        """
+        Analisis trend dan generate insights otomatis.
+        
+        Menganalisis stats untuk memberikan insights seperti:
+            - Automation rate: excellent (>=90%), good (80-90%), warning (<70%)
+            - Average confidence: high (>=90%), warning (<80%)
+            - Manual rate: warning jika >20%
+        
+        Args:
+            stats: Dictionary stats dari get_weekly_stats() atau get_monthly_stats()
+            
+        Returns:
+            String berisi insights, dipisahkan newline
+        """
         insights = []
         
         total = stats.get("total_predictions", 0)
@@ -225,7 +303,25 @@ class AdminCommandHandler:
     
     async def tiket_report(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /tiketreport [monthly|quarterly] [bulan/quarter] [tahun] - Generate ticket & SLA report from Logs sheet
+        /tiketreport [monthly|quarterly] [bulan/quarter] [tahun] - Generate laporan tiket & SLA.
+        
+        Mengambil data dari Logs sheet dan menghitung:
+            - Total tiket dalam periode
+            - SLA Response Time (rata-rata, min, max)
+            - SLA Status (met vs miss rate)
+            - Top 5 Symtomps dengan jumlah tiket
+        
+        Args:
+            monthly: Laporan per bulan (default)
+            quarterly: Laporan per quarter
+            bulan/quarter: Nomor bulan (1-12) atau quarter (1-4)
+            tahun: Tahun 4 digit
+        
+        Contoh:
+            /tiketreport monthly → bulan ini
+            /tiketreport monthly 12 2025 → Desember 2025
+            /tiketreport quarterly → quarter ini
+            /tiketreport quarterly 4 2025 → Q4 2025
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -439,11 +535,25 @@ class AdminCommandHandler:
     
     async def trend_bulan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /trendbulan [MIT|MIS] [bulan] [tahun] - Trend tiket bulanan per aplikasi
+        /trendbulan [MIT|MIS] [bulan] [tahun] - Trend tiket bulanan per aplikasi.
+        
+        Menampilkan Top 10 Symtomps untuk aplikasi tertentu dalam bulan yang dipilih.
+        Data diambil dari Logs sheet dan difilter berdasarkan Ticket ID prefix.
+        
+        Args:
+            MIT: Filter tiket MyTech (Ticket ID dimulai dengan MIT)
+            MIS: Filter tiket MyStaff (Ticket ID dimulai dengan MIS)
+            bulan: Nomor bulan 1-12 (default: bulan ini)
+            tahun: Tahun 4 digit (default: tahun ini)
+        
+        Output:
+            - Total tiket untuk aplikasi tersebut
+            - Top 10 Symtomps dengan persentase
         
         Contoh:
-            /trendbulan MIT           -> MIT bulan ini
-            /trendbulan MIS 12 2025   -> MIS Desember 2025
+            /trendbulan MIT → MyTech bulan ini
+            /trendbulan MIS → MyStaff bulan ini
+            /trendbulan MIT 12 2025 → MyTech Desember 2025
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -604,12 +714,28 @@ class AdminCommandHandler:
     
     async def trend_mingguan(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /trendmingguan [minggu] [bulan] [tahun] [MIT|MIS] - Top 5 tiket per minggu
+        /trendmingguan [minggu] [bulan] [tahun] [MIT|MIS] - Top 5 tiket per minggu.
+        
+        Menampilkan Top 5 Symtomps untuk minggu tertentu, lengkap dengan
+        contoh nama tiket untuk setiap kategori.
+        
+        Pembagian minggu dalam sebulan:
+            - Minggu 1: tanggal 1-7
+            - Minggu 2: tanggal 8-14
+            - Minggu 3: tanggal 15-21
+            - Minggu 4: tanggal 22-28
+            - Minggu 5: tanggal 29-31 (jika ada)
+        
+        Args:
+            minggu: Nomor minggu 1-5 (default: minggu ini)
+            bulan: Nomor bulan 1-12 (default: bulan ini)
+            tahun: Tahun 4 digit (default: tahun ini)
+            MIT|MIS: Optional filter aplikasi
         
         Contoh:
-            /trendmingguan                    -> Minggu ini, semua app
-            /trendmingguan 2                  -> Minggu ke-2 bulan ini
-            /trendmingguan 1 12 2025 MIT      -> Minggu 1 Des 2025 MyTech
+            /trendmingguan → Minggu ini, semua app
+            /trendmingguan 2 → Minggu ke-2 bulan ini
+            /trendmingguan 1 12 2025 MIT → Minggu 1 Des 2025 MyTech
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -816,7 +942,16 @@ class AdminCommandHandler:
     
     async def model_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /modelstatus - Show current model information
+        /modelstatus - Tampilkan informasi model ML yang sedang aktif.
+        
+        Menampilkan metadata model:
+            - Versi model
+            - Jumlah kelas/kategori
+            - Jumlah sampel training
+            - Akurasi training
+            - Waktu training
+            - Threshold per kategori (AUTO/HIGH/MEDIUM/MANUAL)
+            - Sample nama kelas
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -856,7 +991,15 @@ class AdminCommandHandler:
     
     async def pending_review(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /pendingreview - Show items pending manual review
+        /pendingreview - Tampilkan item yang masih menunggu review manual.
+        
+        Menghitung jumlah prediksi di ML_Tracking yang statusnya masih "pending".
+        Breakdown per prioritas:
+            - MANUAL (Critical): Confidence < 50%, perlu perhatian segera
+            - HIGH REVIEW: Confidence 50-70%
+            - MEDIUM REVIEW: Confidence 70-80%
+        
+        Juga menyediakan link langsung ke Google Sheets untuk review.
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -973,7 +1116,17 @@ class AdminCommandHandler:
     
     async def retrain_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /retrainstatus - Check if there's enough data for retraining
+        /retrainstatus - Cek apakah data sudah cukup untuk retrain model.
+        
+        Menampilkan:
+            - Jumlah data yang sudah di-review (APPROVED + CORRECTED)
+            - Status kesiapan retrain (minimal 100 data reviewed)
+            - Distribusi kelas untuk data yang akan ditraining
+            - Jumlah data yang sudah pernah ditraining sebelumnya
+            - Info model yang sedang aktif
+        
+        Note:
+            Retrain baru bisa dilakukan jika ada minimal 100 data reviewed.
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -1055,11 +1208,23 @@ class AdminCommandHandler:
     
     async def reload_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /reloadmodel [version] - Hot reload ML model without restarting bot
+        /reloadmodel [version] - Hot reload model ML tanpa restart bot.
         
-        Example:
-            /reloadmodel       - Reload current version
-            /reloadmodel v3    - Load version v3
+        Memuat ulang model dari disk ke memory. Berguna setelah:
+            - Retrain model selesai
+            - Ingin switch ke versi model lain
+            - Troubleshooting model
+        
+        Args:
+            version: Optional, versi model yang ingin diload (contoh: v2, v3)
+                    Jika tidak diisi, reload versi yang sedang aktif
+        
+        Contoh:
+            /reloadmodel → Reload versi saat ini
+            /reloadmodel v3 → Load versi v3
+        
+        Note:
+            Model baru langsung aktif tanpa perlu restart bot.
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -1109,11 +1274,24 @@ class AdminCommandHandler:
     
     async def retrain(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /retrain [--force] - Retrain model dan auto-reload
+        /retrain [force] - Retrain model ML dan auto-reload.
         
-        Example:
-            /retrain        - Retrain jika threshold tercapai (reviewed >= 100)
-            /retrain force  - Force retrain tanpa check threshold
+        Proses retrain:
+            1. Cek apakah threshold data tercapai (reviewed >= 100)
+            2. Jalankan script retrain.py via subprocess
+            3. Tampilkan progress real-time
+            4. Auto-reload model baru setelah selesai
+            5. Update status di ML_Tracking (mark as TRAINED)
+        
+        Args:
+            force: Optional, skip pengecekan threshold
+        
+        Contoh:
+            /retrain → Retrain jika threshold tercapai
+            /retrain force → Force retrain tanpa cek threshold
+        
+        Note:
+            Model baru langsung aktif tanpa perlu restart bot!
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -1336,9 +1514,19 @@ class AdminCommandHandler:
 
     async def update_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /updatestats - Hitung ulang dan update statistik ke Monitoring sheet
+        /updatestats - Hitung ulang dan update statistik ke Monitoring sheet.
         
-        Otomatis jalan tiap jam, tapi bisa trigger manual via command ini.
+        Menghitung statistik dari ML_Tracking sheet dan menyimpan ke 
+        Monitoring sheet. Statistik ini digunakan oleh command /report.
+        
+        Proses ini otomatis jalan tiap jam, tapi bisa di-trigger manual
+        via command ini jika diperlukan update segera.
+        
+        Output:
+            - Total prediksi
+            - Rata-rata confidence
+            - Distribusi per kategori
+            - Jumlah reviewed
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -1386,7 +1574,20 @@ class AdminCommandHandler:
 
 
 class TrendAlertService:
-    """Background service for trend analysis and auto-alerts."""
+    """
+    Service background untuk analisis trend dan auto-alert.
+    
+    Menganalisis trend performa ML dan mengirim alert otomatis
+    ke admin jika terdeteksi masalah seperti:
+        - Automation rate menurun drastis
+        - Confidence rata-rata di bawah threshold
+        - Manual classification rate terlalu tinggi
+    
+    Attributes:
+        _ml_tracking: Instance MLTrackingClient untuk akses data
+        _alert_chat_id: Telegram chat ID untuk kirim alert
+        _last_alert_date: Tanggal alert terakhir (untuk debounce)
+    """
     
     def __init__(
         self,
@@ -1456,16 +1657,24 @@ def build_reporting_application(
     ml_tracking: Optional["MLTrackingClient"] = None,
 ):
     """
-    Build the reporting/admin bot Application.
+    Build Telegram Application untuk bot admin/reporting.
+    
+    Membuat dan mengkonfigurasi bot Telegram dengan semua command handler
+    untuk monitoring dan management ML model.
     
     Args:
-        config: Application configuration
-        sheets_client: Google Sheets client (shared)
-        ml_classifier: Optional ML classifier for status
-        ml_tracking: Optional ML tracking client
-        
+        config: Konfigurasi aplikasi (token, credentials, dll)
+        sheets_client: Google Sheets client yang sudah terkoneksi
+        ml_classifier: Optional MLClassifier untuk info model
+        ml_tracking: Optional MLTrackingClient untuk akses ML_Tracking
+    
     Returns:
-        Configured Application instance
+        telegram.ext.Application: Instance bot yang siap dijalankan
+    
+    Command yang didaftarkan:
+        /stats, /report, /tiketreport, /trendbulan, /trendmingguan,
+        /modelstatus, /pendingreview, /updatestats, /retrainstatus,
+        /retrain, /reloadmodel, /help
     """
     from telegram.ext import Application
     from telegram import BotCommand

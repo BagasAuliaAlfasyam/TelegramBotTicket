@@ -1,7 +1,20 @@
 """
 Run Collecting Bot
 ===================
-Entry point for the collecting (ops reply) bot.
+
+Entry point untuk menjalankan collecting bot saja.
+
+Bot ini menangani:
+    - Reply ops di grup Telegram
+    - Parsing format "solving, APP -initials"
+    - Prediksi ML untuk kategorisasi Symtomps
+    - Simpan data ke Google Sheets (Logs + ML_Tracking)
+    - Upload media ke S3/MinIO
+
+Usage:
+    python scripts/run_collecting.py
+
+Author: Bagas Aulia Alfasyam
 """
 import asyncio
 import logging
@@ -18,7 +31,18 @@ from src.bots import build_collecting_application
 
 
 def main() -> None:
-    """Run the collecting bot."""
+    """
+    Jalankan collecting bot.
+    
+    Proses inisialisasi:
+        1. Load konfigurasi dari .env
+        2. Validasi konfigurasi wajib
+        3. Inisialisasi Google Sheets client
+        4. Inisialisasi S3 uploader
+        5. Inisialisasi ML Classifier (optional)
+        6. Inisialisasi ML Tracking (optional)
+        7. Build dan jalankan Telegram bot
+    """
     # Load configuration
     config = Config.from_env()
     setup_logging(config.debug)

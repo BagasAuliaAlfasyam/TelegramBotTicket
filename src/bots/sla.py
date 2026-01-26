@@ -1,7 +1,15 @@
 """
 SLA Calculation Utilities
 ==========================
-Helper functions for SLA metrics computation.
+
+Helper functions untuk menghitung metrik SLA tiket.
+
+SLA dihitung dengan aturan:
+    - Target response time: 15 menit
+    - Jam istirahat dikurangi: 12:00-13:00, 19:00-20:00
+    - Status OK jika response <= 15 menit, TERLAMBAT jika lebih
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -15,15 +23,22 @@ def compute_sla(
     tz: ZoneInfo
 ) -> tuple[str | float, str, str | float]:
     """
-    Compute SLA metrics, pausing during configured break windows (12-13, 19-20 local).
+    Hitung metrik SLA dengan memperhitungkan jam istirahat.
+    
+    Jam istirahat (pause) yang dikecualikan dari perhitungan:
+        - 12:00 - 13:00 (makan siang)
+        - 19:00 - 20:00 (makan malam)
     
     Args:
-        tech_dt: Datetime when technician sent the message
-        response_dt: Datetime when ops responded
-        tz: Timezone for local time calculations
-        
+        tech_dt: Datetime saat teknisi mengirim pesan
+        response_dt: Datetime saat ops merespons
+        tz: Timezone untuk kalkulasi waktu lokal
+    
     Returns:
-        Tuple of (response_minutes, status, remaining_minutes)
+        Tuple (response_minutes, status, remaining_minutes):
+            - response_minutes: Waktu respons dalam menit (sudah dikurangi jam istirahat)
+            - status: "OK" jika <= 15 menit, "TERLAMBAT" jika lebih
+            - remaining_minutes: Sisa waktu SLA (15 - response_minutes, min 0)
     """
     if not tech_dt or not response_dt:
         return "", "", ""
@@ -41,7 +56,20 @@ def compute_sla(
 
 
 def _paused_minutes_between(start_utc: datetime, end_utc: datetime, tz: ZoneInfo) -> float:
-    """Calculate total paused minutes (breaks) between two UTC timestamps in local time."""
+    """
+    Hitung total menit jam istirahat antara dua timestamp.
+    
+    Mengiterasi setiap hari dari start sampai end dan menghitung
+    berapa lama overlap dengan jam istirahat (12-13, 19-20).
+    
+    Args:
+        start_utc: Waktu mulai (UTC)
+        end_utc: Waktu selesai (UTC)
+        tz: Timezone untuk konversi ke waktu lokal
+    
+    Returns:
+        float: Total menit yang masuk jam istirahat
+    """
     start_local = start_utc.astimezone(tz)
     end_local = end_utc.astimezone(tz)
     if end_local <= start_local:
@@ -81,7 +109,16 @@ def _overlap_seconds(
     b_start: datetime, 
     b_end: datetime
 ) -> float:
-    """Return overlapping seconds between intervals [a_start, a_end] and [b_start, b_end]."""
+    """
+    Hitung detik overlap antara dua interval waktu.
+    
+    Args:
+        a_start, a_end: Interval pertama [a_start, a_end]
+        b_start, b_end: Interval kedua [b_start, b_end]
+    
+    Returns:
+        float: Jumlah detik overlap, 0 jika tidak overlap
+    """
     latest_start = max(a_start, b_start)
     earliest_end = min(a_end, b_end)
     delta = (earliest_end - latest_start).total_seconds()

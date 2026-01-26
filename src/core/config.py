@@ -1,7 +1,20 @@
 """
 Core Configuration Module
 ==========================
-Centralized configuration management using environment variables.
+
+Management konfigurasi terpusat menggunakan environment variables.
+
+Mendukung:
+    - .env file untuk konfigurasi default
+    - .env.local untuk override development lokal
+    - System environment variables
+
+Prioritas loading (tertinggi ke terendah):
+    1. .env.local (jika ada)
+    2. .env
+    3. System environment variables
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -19,9 +32,34 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass
 class Config:
     """
-    Application configuration loaded from environment variables.
+    Konfigurasi aplikasi yang diload dari environment variables.
     
-    Supports .env.local for local development overrides.
+    Semua setting aplikasi dikumpulkan di class ini untuk memudahkan
+    management dan validasi. Mendukung .env.local untuk override lokal.
+    
+    Attributes:
+        telegram_collecting_bot_token: Token bot untuk collecting tiket
+        telegram_reporting_bot_token: Token bot untuk reporting/admin
+        telegram_ops_chat_id: Chat ID grup ops
+        telegram_tech_chat_id: Chat ID grup teknisi
+        telegram_admin_chat_id: Chat ID untuk notifikasi admin
+        google_service_account_json: Path ke file credentials Google
+        google_spreadsheet_name: Nama spreadsheet Google Sheets
+        google_worksheet_name: Nama worksheet (default: Logs)
+        aws_access_key_id: AWS/MinIO access key
+        aws_secret_access_key: AWS/MinIO secret key
+        s3_bucket_name: Nama bucket S3
+        s3_region: Region S3 (default: ap-southeast-1)
+        s3_endpoint_url: Custom endpoint untuk MinIO
+        s3_public_url: Base URL publik untuk file
+        model_dir: Direktori model ML
+        model_version: Versi model ("auto" = baca dari current_version.txt)
+        threshold_auto: Threshold confidence untuk AUTO (default: 0.90)
+        threshold_high: Threshold untuk HIGH REVIEW (default: 0.85)
+        threshold_medium: Threshold untuk MEDIUM REVIEW (default: 0.70)
+        timezone: Timezone aplikasi (default: Asia/Jakarta)
+        debug: Mode debug
+        admin_user_ids: List ID user admin
     """
     
     # Telegram Bot tokens
@@ -65,12 +103,22 @@ class Config:
     @classmethod
     def from_env(cls, env_path: Optional[Path] = None) -> "Config":
         """
-        Load configuration from environment variables.
+        Load konfigurasi dari environment variables.
         
-        Priority:
-        1. .env.local (if exists)
-        2. .env
-        3. System environment variables
+        Prioritas loading:
+            1. .env.local (jika ada) - untuk override development
+            2. .env - konfigurasi default
+            3. System environment variables
+        
+        Args:
+            env_path: Optional path ke file .env custom
+        
+        Returns:
+            Config: Instance konfigurasi yang sudah diload
+        
+        Note:
+            Untuk MODEL_VERSION="auto", versi akan dibaca dari
+            current_version.txt saat MLClassifier di-initialize.
         """
         # Determine base path
         if env_path:
@@ -128,10 +176,15 @@ class Config:
     
     def validate(self) -> list[str]:
         """
-        Validate configuration and return list of errors.
+        Validasi konfigurasi dan return list error.
+        
+        Mengecek apakah konfigurasi wajib sudah diisi:
+            - TELEGRAM_BOT_TOKEN_COLLECTING
+            - GOOGLE_SPREADSHEET_NAME
+            - Service account file exists
         
         Returns:
-            List of error messages (empty if valid)
+            list[str]: List pesan error (kosong jika valid)
         """
         errors = []
         
@@ -147,7 +200,12 @@ class Config:
         return errors
     
     def __repr__(self) -> str:
-        """Safe representation that hides secrets."""
+        """
+        Representasi aman yang menyembunyikan secrets.
+        
+        Hanya menampilkan informasi non-sensitif seperti
+        nama spreadsheet, versi model, dan timezone.
+        """
         return (
             f"Config("
             f"spreadsheet={self.google_spreadsheet_name!r}, "
@@ -158,10 +216,13 @@ class Config:
 
 def setup_logging(debug: bool = False) -> None:
     """
-    Setup logging configuration.
+    Setup konfigurasi logging.
+    
+    Mengatur format log dan level berdasarkan mode debug.
+    Juga meredam noise dari library eksternal (httpx, telegram, gspread).
     
     Args:
-        debug: Enable debug level logging
+        debug: Jika True, gunakan level DEBUG. Jika False, gunakan INFO.
     """
     level = logging.DEBUG if debug else logging.INFO
     

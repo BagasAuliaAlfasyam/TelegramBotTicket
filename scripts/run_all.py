@@ -2,11 +2,19 @@
 """
 Unified Bot Runner
 ===================
-Run both collecting and reporting bots in a single process.
-Includes hourly monitoring stats scheduler.
+
+Jalankan kedua bot (collecting + reporting) dalam satu proses.
+Termasuk scheduler untuk update stats monitoring setiap jam.
+
+Komponen yang dijalankan:
+    1. Collecting Bot - Handle reply ops dan log ke sheets
+    2. Reporting Bot - Admin commands untuk monitoring ML
+    3. Monitoring Scheduler - Update stats per jam ke Monitoring sheet
 
 Usage:
     python scripts/run_all.py
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -29,7 +37,12 @@ from src.bots.admin import build_reporting_application
 
 
 def setup_logging(debug: bool = False) -> None:
-    """Configure logging for both bots."""
+    """
+    Konfigurasi logging untuk kedua bot.
+    
+    Meredam noise dari library eksternal (httpx, httpcore, gspread)
+    agar log lebih mudah dibaca.
+    """
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
         format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -50,7 +63,12 @@ async def run_collecting_bot(
     ml_tracking: MLTrackingClient | None,
     logger: logging.Logger,
 ) -> None:
-    """Run collecting bot asynchronously."""
+    """
+    Jalankan collecting bot secara asynchronous.
+    
+    Bot ini menangani reply ops di grup Telegram dan menyimpan
+    data tiket ke Google Sheets + ML_Tracking.
+    """
     if not config.telegram_collecting_bot_token:
         logger.warning("TELEGRAM_BOT_TOKEN_COLLECTING not set, skipping collecting bot")
         return
@@ -90,7 +108,12 @@ async def run_reporting_bot(
     ml_tracking: MLTrackingClient | None,
     logger: logging.Logger,
 ) -> None:
-    """Run reporting bot asynchronously."""
+    """
+    Jalankan reporting bot secara asynchronous.
+    
+    Bot ini menyediakan admin commands untuk monitoring performa ML
+    dan generate laporan tiket.
+    """
     if not config.telegram_reporting_bot_token:
         logger.warning("TELEGRAM_BOT_TOKEN_REPORTING not set, skipping reporting bot")
         return
@@ -129,16 +152,22 @@ async def run_monitoring_scheduler(
     interval_seconds: int = 3600,  # 1 hour default
 ) -> None:
     """
-    Background scheduler to update Monitoring sheet stats hourly.
+    Background scheduler untuk update stats Monitoring sheet per jam.
     
-    Calculates stats for the current hour from ML_Tracking sheet
-    and updates the Monitoring sheet with hourly granularity.
+    Menghitung statistik dari ML_Tracking untuk jam saat ini dan
+    menyimpan ke Monitoring sheet dengan granularitas per jam.
+    
+    Stats yang dihitung:
+        - Total prediksi dalam jam tersebut
+        - Rata-rata confidence
+        - Distribusi per kategori (AUTO/HIGH/MEDIUM/MANUAL)
+        - Jumlah reviewed
     
     Args:
-        ml_classifier: ML classifier for model version
-        ml_tracking: ML tracking client
+        ml_classifier: ML classifier untuk mendapat model version
+        ml_tracking: ML tracking client untuk akses sheet
         logger: Logger instance
-        interval_seconds: Update interval (default 1 hour)
+        interval_seconds: Interval update dalam detik (default 1 jam)
     """
     if not ml_tracking:
         logger.warning("ML Tracking not initialized, monitoring scheduler disabled")
@@ -183,7 +212,17 @@ async def main_async(
     ml_tracking: MLTrackingClient | None,
     logger: logging.Logger,
 ) -> None:
-    """Main async entry point - runs both bots concurrently."""
+    """
+    Entry point async utama - jalankan semua bot secara concurrent.
+    
+    Membuat task untuk:
+        1. Collecting bot (handle reply ops)
+        2. Reporting bot (admin commands)
+        3. Monitoring scheduler (stats per jam)
+    
+    Semua task berjalan bersamaan dan di-graceful shutdown
+    saat menerima KeyboardInterrupt.
+    """
     
     # Create tasks for both bots
     tasks = []
@@ -244,7 +283,16 @@ async def main_async(
 
 
 def main() -> None:
-    """Entry point with signal handling."""
+    """
+    Entry point dengan signal handling.
+    
+    Proses:
+        1. Load konfigurasi dari .env
+        2. Validasi konfigurasi
+        3. Inisialisasi services (sheets, S3, ML) secara synchronous
+        4. Jalankan async loop dengan semua bots
+        5. Handle KeyboardInterrupt untuk graceful shutdown
+    """
     # Load configuration BEFORE async loop
     config = Config.from_env()
     setup_logging(config.debug)

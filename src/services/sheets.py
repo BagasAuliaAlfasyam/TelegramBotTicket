@@ -1,7 +1,21 @@
 """
 Google Sheets Service
 ======================
-Wrapper around gspread to append log rows into Google Sheets.
+
+Modul ini menyediakan wrapper untuk gspread agar mudah menulis
+dan membaca data dari Google Sheets.
+
+Digunakan untuk:
+- Append row log tiket ke sheet Logs
+- Update row yang sudah ada
+- Membaca data untuk training ML
+
+Kolom sheet Logs:
+    A-R: Berbagai field tiket
+    S: Solving (dari ops)
+    T: Symtomps (hasil prediksi ML atau manual)
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -18,7 +32,17 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class GoogleSheetsClient:
-    """Simple helper for appending rows to the configured worksheet."""
+    """
+    Helper untuk operasi read/write ke Google Sheets worksheet.
+    
+    Client ini menangani koneksi ke Google Sheets menggunakan service account
+    dan menyediakan method untuk append, update, dan query data.
+    
+    Attributes:
+        _config: Konfigurasi aplikasi (credentials, spreadsheet name, dll)
+        _spreadsheet: Instance gspread.Spreadsheet
+        _worksheet: Instance gspread.Worksheet untuk sheet Logs
+    """
 
     def __init__(self, config: "Config") -> None:
         self._config = config
@@ -27,11 +51,33 @@ class GoogleSheetsClient:
 
     @property
     def spreadsheet(self) -> gspread.Spreadsheet:
-        """Return the spreadsheet object for reuse by other services."""
+        """
+        Getter untuk spreadsheet object.
+        
+        Berguna untuk reuse koneksi oleh service lain seperti MLTrackingClient
+        agar tidak perlu buat koneksi baru.
+        
+        Returns:
+            gspread.Spreadsheet: Instance spreadsheet yang terkoneksi
+        """
         return self._spreadsheet
 
     def _connect(self) -> gspread.Worksheet:
-        """Connect to Google Sheets and return the configured worksheet."""
+        """
+        Koneksi ke Google Sheets dan return worksheet yang dikonfigurasi.
+        
+        Proses:
+            1. Buat client dengan service account credentials
+            2. Buka spreadsheet berdasarkan nama di config
+            3. Akses worksheet (sheet) sesuai config
+        
+        Returns:
+            gspread.Worksheet: Worksheet yang siap digunakan
+            
+        Raises:
+            GSpreadException: Jika gagal koneksi
+            APIError: Jika API Google Sheets error
+        """
         try:
             client = gspread.service_account(
                 filename=str(self._config.google_service_account_json)
@@ -55,9 +101,21 @@ class GoogleSheetsClient:
         return_row_index: bool = False
     ) -> int | None:
         """
-        Append a row to the worksheet using raw value input.
-
-        When return_row_index=True, returns the 1-based row index where the row was written.
+        Tambah baris baru ke worksheet menggunakan RAW value input.
+        
+        Baris ditambahkan di akhir sheet. Method ini digunakan untuk
+        menyimpan data tiket baru ke Logs sheet.
+        
+        Args:
+            row: Sequence data untuk satu baris (list/tuple)
+            return_row_index: Jika True, return index baris yang ditulis
+        
+        Returns:
+            int atau None: Index baris (1-based) jika return_row_index=True
+            
+        Raises:
+            GSpreadException: Jika gagal append
+            APIError: Jika API quota exceeded atau error lain
         """
         row_index = None
         if return_row_index:
@@ -79,7 +137,20 @@ class GoogleSheetsClient:
         row_index: int, 
         row: Sequence[str | int | None]
     ) -> None:
-        """Update an existing row in the worksheet."""
+        """
+        Update baris yang sudah ada di worksheet.
+        
+        Digunakan untuk update data tiket yang sudah di-append sebelumnya,
+        misalnya ketika ada data tambahan atau koreksi.
+        
+        Args:
+            row_index: Index baris yang akan di-update (1-based)
+            row: Data baris baru untuk menggantikan data lama
+            
+        Note:
+            Range update otomatis menyesuaikan: A-T jika ada 20+ kolom,
+            A-S jika kurang.
+        """
         try:
             # Determine range based on row length (support kolom Symtomps di T)
             end_col = "T" if len(row) >= 20 else "S"
@@ -98,7 +169,15 @@ class GoogleSheetsClient:
             raise
 
     def get_row(self, row_index: int) -> list[str]:
-        """Fetch a single row by index (1-based)."""
+        """
+        Ambil satu baris berdasarkan index.
+        
+        Args:
+            row_index: Index baris (1-based, baris 1 = header)
+            
+        Returns:
+            list[str]: List nilai dari baris tersebut, atau [] jika gagal
+        """
         try:
             values = self._worksheet.row_values(row_index)
             return values
@@ -108,10 +187,16 @@ class GoogleSheetsClient:
 
     def find_row_index_by_tech_message_id(self, tech_message_id: str) -> int | None:
         """
-        Locate the row index for a given technician message id.
-
-        Uses worksheet.find which searches the whole sheet; assumes tech_message_id
-        is unique per sheet (one ticket per technician message).
+        Cari index baris berdasarkan tech_message_id.
+        
+        Menggunakan worksheet.find() untuk mencari di seluruh sheet.
+        Asumsi: tech_message_id unik per sheet (satu tiket per pesan teknisi).
+        
+        Args:
+            tech_message_id: ID pesan Telegram teknisi yang dicari
+            
+        Returns:
+            int atau None: Index baris jika ditemukan, None jika tidak ada
         """
         try:
             cell = self._worksheet.find(str(tech_message_id))
@@ -125,10 +210,12 @@ class GoogleSheetsClient:
     
     def get_all_logs_data(self) -> list[list[str]]:
         """
-        Get all data from Logs sheet for retraining.
+        Ambil semua data dari Logs sheet.
+        
+        Digunakan untuk retraining model ML.
         
         Returns:
-            List of all rows including header
+            list[list[str]]: Semua baris termasuk header
         """
         try:
             return self._worksheet.get_all_values()
@@ -138,11 +225,16 @@ class GoogleSheetsClient:
     
     def get_logs_for_training(self) -> list[dict]:
         """
-        Get Logs data formatted for training.
-        Only returns rows with Symtomps column filled (column T).
+        Ambil data Logs yang sudah dilabeli untuk training.
+        
+        Hanya return baris yang kolom Symtomps (kolom T) sudah terisi.
+        Data ini digunakan sebagai training data untuk model ML.
         
         Returns:
-            List of dicts with tech_raw_text, solving, symtomps
+            list[dict]: List dict dengan keys:
+                - tech_raw_text: Teks dari teknisi (kolom M)
+                - solving: Teks solving dari ops (kolom P)
+                - symtomps: Label kategori (kolom T)
         """
         try:
             all_data = self._worksheet.get_all_values()

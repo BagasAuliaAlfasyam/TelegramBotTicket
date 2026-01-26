@@ -1,7 +1,19 @@
 """
 Run Reporting Bot
 ==================
-Entry point for the reporting (admin) bot.
+
+Entry point untuk menjalankan reporting/admin bot saja.
+
+Bot ini menyediakan command admin untuk:
+    - Monitoring statistik ML (/stats, /report)
+    - Laporan tiket dan SLA (/tiketreport, /trendbulan)
+    - Status dan management model (/modelstatus, /reloadmodel)
+    - Retraining (/retrainstatus, /retrain)
+
+Usage:
+    python scripts/run_reporting.py
+
+Author: Bagas Aulia Alfasyam
 """
 import asyncio
 import logging
@@ -19,7 +31,18 @@ from src.bots import AdminCommandHandler, TrendAlertService
 
 
 def main() -> None:
-    """Run the reporting bot with admin commands."""
+    """
+    Jalankan reporting bot dengan admin commands.
+    
+    Proses inisialisasi:
+        1. Load konfigurasi dari .env
+        2. Validasi token reporting
+        3. Inisialisasi ML Classifier (optional)
+        4. Inisialisasi ML Tracking (optional)
+        5. Setup admin command handlers
+        6. Setup trend alert scheduler (setiap 6 jam)
+        7. Jalankan Telegram bot
+    """
     # Load configuration
     config = Config.from_env()
     setup_logging(config.debug)

@@ -2,17 +2,19 @@
 """
 Sync Training Data - Logs → ML_Tracking
 ========================================
-Script untuk sync data training dari Logs sheet ke ML_Tracking sheet.
 
+Script untuk sync data training dari Logs sheet ke ML_Tracking sheet.
 ML_Tracking akan menjadi single source of truth untuk training data.
+
+Flow:
+    1. Load semua data dari Logs sheet (yang punya Symtomps)
+    2. Format ke struktur ML_Tracking (7 kolom)
+    3. Append/Update ke ML_Tracking sheet
 
 Usage:
     python scripts/sync_training_data.py
-    
-Flow:
-    1. Load semua data dari Logs sheet (yang punya Symtomps)
-    2. Format ke struktur ML_Tracking
-    3. Replace/Update ML_Tracking sheet
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -49,8 +51,14 @@ def sync_logs_to_ml_tracking(config: Config) -> dict:
     """
     Sync data dari Logs sheet ke ML_Tracking sheet.
     
+    Proses:
+        1. Koneksi ke Google Sheets
+        2. Baca semua data dari Logs yang punya Symtomps
+        3. Format ke struktur ML_Tracking 7 kolom
+        4. Append ke ML_Tracking (skip duplikat berdasarkan tech_message_id)
+    
     Returns:
-        dict with sync stats
+        dict: Statistik sync (total, synced, skipped)
     """
     if not HAS_GSPREAD:
         raise ImportError("gspread is required for syncing")

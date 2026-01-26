@@ -2,18 +2,21 @@
 """
 Batch Predict Script
 ====================
-Predict semua data yang Symtomps-nya kosong dan update ke Google Sheets.
 
-Logic:
-- Confidence >= 90% (AUTO): Insert langsung ke Logs.Symtomps
-- Confidence < 90%: Tambah ke ML_Tracking untuk review, Logs.Symtomps tetap kosong
+Prediksi semua data yang Symtomps-nya kosong dan update ke Google Sheets.
+
+Logika:
+    - Confidence >= 90% (AUTO): Insert langsung ke Logs.Symtomps
+    - Confidence < 90%: Tambah ke ML_Tracking untuk review,
+      Logs.Symtomps tetap kosong
 
 Usage:
-    python scripts/batch_predict.py                  # Use .env config
-    python scripts/batch_predict.py --spreadsheet "Log_Tiket_MyTech"  # Override spreadsheet
-    python scripts/batch_predict.py --dry-run        # Preview without updating
-    python scripts/batch_predict.py --env-file /path/to/.env  # Custom .env path
-    python scripts/batch_predict.py --credentials /path/to/creds.json  # Custom credentials
+    python scripts/batch_predict.py                  # Gunakan .env config
+    python scripts/batch_predict.py --spreadsheet "Log_Tiket"  # Override spreadsheet
+    python scripts/batch_predict.py --dry-run        # Preview tanpa update
+    python scripts/batch_predict.py --model-version v2  # Gunakan versi spesifik
+
+Author: Bagas Aulia Alfasyam
 """
 
 import sys
@@ -42,7 +45,11 @@ AUTO_THRESHOLD = 0.90  # >= 90% confidence = AUTO (insert to Symtomps)
 
 
 def get_current_version(model_dir: Path) -> str:
-    """Get current model version from current_version.txt or default to v1."""
+    """
+    Dapatkan versi model saat ini dari current_version.txt.
+    
+    Jika file tidak ada, cari folder versi tertinggi.
+    """
     version_file = model_dir / "current_version.txt"
     if version_file.exists():
         return version_file.read_text().strip()
@@ -54,7 +61,16 @@ def get_current_version(model_dir: Path) -> str:
 
 
 def load_model(model_dir: Path, version: str = None):
-    """Load model and vectorizer from versioned directory"""
+    """
+    Load model dan vectorizer dari direktori berversi.
+    
+    Args:
+        model_dir: Path ke direktori models/
+        version: Versi spesifik (None = gunakan current)
+    
+    Returns:
+        tuple: (tfidf, model, label_encoder, version)
+    """
     if version is None:
         version = get_current_version(model_dir)
     
@@ -92,7 +108,11 @@ def load_model(model_dir: Path, version: str = None):
 
 
 def preprocess_text(text: str) -> str:
-    """Simple text preprocessing"""
+    """
+    Preprocessing teks sederhana.
+    
+    Lowercase dan normalize whitespace.
+    """
     if pd.isna(text) or not text:
         return ""
     text = str(text).lower().strip()
@@ -103,7 +123,18 @@ def preprocess_text(text: str) -> str:
 
 
 def predict_batch(texts: list, tfidf, model, le):
-    """Predict batch of texts"""
+    """
+    Prediksi batch teks sekaligus.
+    
+    Args:
+        texts: List teks yang akan diprediksi
+        tfidf: TF-IDF vectorizer (bisa dict word+char atau single)
+        model: LightGBM model
+        le: Label encoder
+    
+    Returns:
+        list[dict]: List prediksi dengan keys: label, confidence, status
+    """
     # Preprocess
     processed = [preprocess_text(t) for t in texts]
     
@@ -142,7 +173,11 @@ def predict_batch(texts: list, tfidf, model, le):
 
 
 def parse_args():
-    """Parse command line arguments."""
+    """
+    Parse command line arguments.
+    
+    Mendukung override spreadsheet, dry-run mode, dan model version.
+    """
     parser = argparse.ArgumentParser(description='Batch predict Symtomps for empty rows')
     parser.add_argument('--spreadsheet', '-s', type=str, help='Override spreadsheet name from config')
     parser.add_argument('--dry-run', '-d', action='store_true', help='Preview without updating sheets')

@@ -1,7 +1,18 @@
 """
 S3 Storage Service
 ===================
-Utility helpers for uploading media bytes to S3 compatible storage.
+
+Utility helper untuk upload media ke S3-compatible storage.
+
+Mendukung:
+    - AWS S3 standar
+    - MinIO (self-hosted)
+    - Storage S3-compatible lainnya
+
+File yang diupload akan mendapat URL publik yang bisa diakses
+langsung tanpa autentikasi.
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -19,7 +30,20 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class S3Uploader:
-    """Thin wrapper around boto3 to upload media objects and return public URLs."""
+    """
+    Wrapper tipis untuk boto3 untuk upload media dan generate public URL.
+    
+    Class ini menangani konfigurasi boto3 client termasuk:
+        - Path-style addressing untuk kompatibilitas MinIO
+        - Signature v4 untuk keamanan
+        - ACL public-read untuk akses publik
+    
+    Attributes:
+        _bucket: Nama bucket S3
+        _public_base_url: Base URL untuk akses publik
+        _media_prefix: Prefix path untuk file yang diupload
+        _client: boto3 S3 client
+    """
 
     def __init__(
         self, 
@@ -73,9 +97,22 @@ class S3Uploader:
 
     def upload_bytes(self, *, key: str, data: bytes, content_type: str) -> str:
         """
-        Upload raw bytes under the provided key.
-
-        Returns the publicly accessible URL if the upload succeeds.
+        Upload raw bytes ke S3 dengan key yang diberikan.
+        
+        File akan diupload dengan ACL public-read sehingga bisa
+        diakses publik tanpa autentikasi.
+        
+        Args:
+            key: Object key (nama file) di S3
+            data: Bytes data yang akan diupload
+            content_type: MIME type file (contoh: "image/jpeg")
+        
+        Returns:
+            str: URL publik untuk mengakses file
+        
+        Raises:
+            ClientError: Jika upload gagal (permission, network, dll)
+            BotoCoreError: Jika ada error boto3
         """
         object_key = self._build_object_key(key)
         try:
@@ -93,7 +130,15 @@ class S3Uploader:
         return f"{self._public_base_url}/{object_key}"
 
     def _build_object_key(self, key: str) -> str:
-        """Build full object key with prefix."""
+        """
+        Build full object key dengan prefix.
+        
+        Args:
+            key: Object key tanpa prefix
+            
+        Returns:
+            str: Object key lengkap dengan prefix
+        """
         trimmed_key = key.lstrip("/")
         if self._media_prefix:
             return f"{self._media_prefix}{trimmed_key}"

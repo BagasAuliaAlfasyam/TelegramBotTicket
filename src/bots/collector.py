@@ -70,7 +70,18 @@ _EXTENSION_BY_TYPE = {
 
 @dataclass
 class MediaInfo:
-    """Container for media file information."""
+    """
+    Container untuk informasi file media (foto/video/dokumen).
+    
+    Digunakan untuk menyimpan detail media attachment dari message teknisi
+    sebelum di-upload ke S3 storage.
+    
+    Attributes:
+        media_type: Jenis media (photo/video/document/audio/animation)
+        file_id: ID unik dari Telegram untuk download file
+        mime_type: Tipe MIME file (contoh: image/jpeg, video/mp4)
+        file_name: Nama file asli (hanya untuk document)
+    """
     media_type: str
     file_id: str
     mime_type: str | None
@@ -78,7 +89,20 @@ class MediaInfo:
 
 
 class PersistentState:
-    """Lightweight JSON-backed store for ack caches across restarts."""
+    """
+    Penyimpanan cache ke file JSON yang tetap ada meskipun bot restart.
+    
+    Fungsi utama:
+    - Menyimpan waktu "oncek" (acknowledgment) per tiket
+    - Menyimpan row index di Google Sheets per tiket
+    - Data tidak hilang saat bot restart/crash
+    
+    Cara kerja:
+    - Saat bot start: load data dari state_cache.json
+    - Saat ada update: auto-save ke state_cache.json
+    
+    Key format: (chat_id, tech_message_id) -> value
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -140,7 +164,29 @@ class PersistentState:
 
 
 class OpsCollector:
-    """Stateful handler that encapsulates collecting logic."""
+    """
+    Handler utama untuk memproses reply Ops dan menyimpan ke berbagai sistem.
+    
+    Ini adalah class inti yang menangani seluruh flow collecting tiket:
+    1. Validasi sender (hanya user authorized yang bisa input)
+    2. Parsing format MIT/MIS dari text message
+    3. Extract info media (foto/video) dari message teknisi
+    4. Upload media ke S3/MinIO
+    5. Prediksi Symtomps menggunakan ML model
+    6. Simpan ke Logs sheet (primary data)
+    7. Simpan ke ML_Tracking sheet (audit trail ML)
+    8. Kirim notifikasi ke admin
+    
+    Attributes:
+        _config: Konfigurasi aplikasi (token, timezone, dll)
+        _sheets: Client untuk operasi Google Sheets
+        _s3_uploader: Client untuk upload ke S3/MinIO
+        _ml_classifier: Model ML untuk prediksi Symtomps
+        _ml_tracking: Client untuk logging ke ML_Tracking sheet
+        _reporting_bot: Bot terpisah untuk kirim notifikasi
+        _state: Cache persistent untuk data oncek
+        _tz: Timezone untuk formatting waktu (Asia/Jakarta)
+    """
 
     def __init__(
         self,
@@ -171,13 +217,13 @@ class OpsCollector:
             self._tz = timezone.utc
 
     async def health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Simple health endpoint useful for debugging deployments."""
+        """\n        Health check endpoint untuk monitoring.\n        \n        Trigger: Command /health atau /ping\n        Response: "OK {timestamp}"\n        \n        Berguna untuk:\n        - Cek apakah bot masih hidup\n        - Debugging saat deployment\n        - Monitoring uptime\n        """
         if not update.message:
             return
         await update.message.reply_text(f"OK {datetime.now(timezone.utc).isoformat()}")
 
     async def handle_ops_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Process Ops replies, validate format, and log them to Google Sheets."""
+        """\n        Proses reply dari Ops, validasi format, dan simpan ke Google Sheets.\n        \n        Ini adalah FUNGSI UTAMA yang dipanggil setiap kali ada message masuk.\n        \n        Flow:\n        1. Validasi: Ada message? Ada reply? Sender authorized?\n        2. Detect type: "oncek" (acknowledgment) atau solusi (MIT/MIS)?\n        3. Extract info: message teknisi, media, timestamps\n        4. Upload media ke S3 (kalau ada foto/video)\n        5. Build row data untuk Sheets\n        6. ML Prediction (kalau bukan oncek):\n           - Prediksi kategori Symtomps\n           - Confidence >= 80%: isi otomatis di Logs\n           - Confidence < 80%: kosongkan (perlu review manual)\n        7. Simpan ke Logs sheet (update atau append)\n        8. Simpan ke ML_Tracking sheet (retry 3x kalau gagal)\n        9. Kirim notifikasi ke admin\n        \n        Format message yang diterima:\n        - Oncek: "oncek" (case insensitive)\n        - Solusi: "MIT [solving] -bg" atau "MIS [solving] -dm"\n        \n        Kalau Logs gagal: return early, tidak lanjut\n        Kalau ML_Tracking gagal: Logs tetap aman, notify admin\n        """
         message = update.effective_message
         if not message or not message.text or not message.reply_to_message:
             return
@@ -426,7 +472,25 @@ class OpsCollector:
         chat_id: int,
         message_id: int,
     ) -> str:
-        """Upload media file to S3 and return URL."""
+        """
+        Download media dari Telegram dan upload ke S3/MinIO storage.
+        
+        Flow:
+        1. Tentukan MIME type dan extension file
+        2. Generate key path: {YYYY}/{MM}/{DD}/{chat_id}/{message_id}_{timestamp}.{ext}
+        3. Download file dari Telegram ke memory
+        4. Upload ke S3/MinIO
+        5. Return URL publik
+        
+        Args:
+            bot: Telegram Bot instance untuk download file
+            info: MediaInfo berisi file_id dan metadata
+            chat_id: ID chat untuk path naming
+            message_id: ID message untuk path naming
+            
+        Returns:
+            URL publik dari file yang diupload
+        """
         mime_type = info.mime_type or _DEFAULT_MIME_BY_TYPE.get(info.media_type, "application/octet-stream")
         extension = _guess_extension(info, mime_type)
         timestamp = datetime.now(timezone.utc)
@@ -445,7 +509,19 @@ class OpsCollector:
         )
 
     async def _safe_notify(self, chat_id: int, text: str, reply_to_id: int | None) -> None:
-        """Send a notification using the reporting bot without crashing on failure."""
+        """
+        Kirim notifikasi via reporting bot tanpa crash kalau gagal.
+        
+        Safety wrapper untuk send_message yang:
+        - Skip kalau reporting bot tidak dikonfigurasi
+        - Catch exception dan log warning (tidak raise)
+        - Gunakan HTML parse mode untuk formatting
+        
+        Args:
+            chat_id: ID chat tujuan notifikasi
+            text: Pesan yang akan dikirim (HTML supported)
+            reply_to_id: ID message untuk reply (opsional)
+        """
         if not self._reporting_bot:
             _LOGGER.debug("Reporting bot not configured, skipping notification")
             return
@@ -465,7 +541,23 @@ class OpsCollector:
 # ============ Helper Functions ============
 
 def _build_message_link(chat_id: int, message_id: int) -> str | None:
-    """Build a t.me deep link for supergroups when possible."""
+    """
+    Buat deep link t.me untuk message di supergroup.
+    
+    Format output: https://t.me/c/{short_id}/{message_id}
+    
+    Catatan:
+    - Hanya untuk supergroup (chat_id negatif)
+    - Private chat tidak support deep link
+    - short_id = chat_id tanpa prefix "100"
+    
+    Args:
+        chat_id: ID chat (harus negatif untuk supergroup)
+        message_id: ID message yang akan di-link
+        
+    Returns:
+        URL deep link atau None jika bukan supergroup
+    """
     if chat_id >= 0:
         return None
     abs_id = str(abs(chat_id))
@@ -477,7 +569,21 @@ def _build_message_link(chat_id: int, message_id: int) -> str | None:
 
 
 def _extract_media_info(message: Message) -> MediaInfo:
-    """Derive media details from a technician message."""
+    """
+    Extract informasi media dari message teknisi.
+    
+    Cek secara berurutan: photo -> document -> video -> animation -> audio
+    Return MediaInfo kosong jika tidak ada media.
+    
+    Untuk photo: ambil ukuran terbesar (index -1)
+    Untuk document: include file_name original
+    
+    Args:
+        message: Telegram Message object
+        
+    Returns:
+        MediaInfo dengan detail media atau kosong jika tidak ada
+    """
     if message.photo:
         return MediaInfo("photo", message.photo[-1].file_id, "image/jpeg", None)
     if message.document:
@@ -492,7 +598,22 @@ def _extract_media_info(message: Message) -> MediaInfo:
 
 
 def _guess_extension(info: MediaInfo, mime_type: str) -> str:
-    """Guess file extension from media info."""
+    """
+    Tebak file extension berdasarkan info media.
+    
+    Prioritas:
+    1. Ambil dari file_name asli (kalau ada)
+    2. Mapping dari MIME type (image/jpeg -> jpg)
+    3. Mapping dari media type (photo -> jpg)
+    4. Default: "bin"
+    
+    Args:
+        info: MediaInfo dengan file_name
+        mime_type: MIME type file
+        
+    Returns:
+        File extension tanpa titik (contoh: jpg, mp4, pdf)
+    """
     if info.file_name:
         suffix = Path(info.file_name).suffix
         if suffix:
@@ -501,7 +622,18 @@ def _guess_extension(info: MediaInfo, mime_type: str) -> str:
 
 
 def _to_utc_datetime(value: datetime | None) -> datetime | None:
-    """Normalize a datetime to UTC."""
+    """
+    Konversi datetime ke UTC timezone.
+    
+    Kalau datetime tidak punya timezone info (naive),
+    anggap sudah UTC dan tambahkan tzinfo.
+    
+    Args:
+        value: Datetime object atau None
+        
+    Returns:
+        Datetime dalam UTC atau None
+    """
     if not value:
         return None
     if value.tzinfo is None:
@@ -510,7 +642,19 @@ def _to_utc_datetime(value: datetime | None) -> datetime | None:
 
 
 def _to_local_datetime(value: datetime | None, tz: ZoneInfo) -> datetime | None:
-    """Convert a UTC datetime to the configured local timezone."""
+    """
+    Konversi datetime UTC ke timezone lokal yang dikonfigurasi.
+    
+    Digunakan untuk formatting waktu yang ditampilkan ke user
+    dan disimpan ke Sheets (biasanya Asia/Jakarta).
+    
+    Args:
+        value: Datetime dalam UTC
+        tz: Target timezone (contoh: Asia/Jakarta)
+        
+    Returns:
+        Datetime dalam timezone lokal atau None
+    """
     if not value:
         return None
     return value.astimezone(tz)
@@ -525,7 +669,27 @@ def build_collecting_application(
     ml_classifier: Optional["MLClassifier"] = None,
     ml_tracking: Optional["MLTrackingClient"] = None,
 ) -> Application:
-    """Wire handlers into the telegram Application instance."""
+    """
+    Buat dan konfigurasi Telegram Application untuk collecting bot.
+    
+    Fungsi ini:
+    1. Membuat instance OpsCollector dengan semua dependencies
+    2. Build Telegram Application dengan token bot
+    3. Register handlers:
+       - /health, /ping: Health check
+       - Text message: handle_ops_reply (proses tiket)
+       - Edited message: handle_ops_reply (update tiket)
+    
+    Args:
+        config: Konfigurasi aplikasi
+        sheets_client: Client Google Sheets
+        s3_uploader: Client S3/MinIO
+        ml_classifier: Model ML (opsional)
+        ml_tracking: Client ML_Tracking (opsional)
+        
+    Returns:
+        Telegram Application yang siap dijalankan
+    """
     collector = OpsCollector(
         config, sheets_client, s3_uploader,
         ml_classifier=ml_classifier,

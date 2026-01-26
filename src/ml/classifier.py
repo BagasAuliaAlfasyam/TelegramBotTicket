@@ -1,8 +1,31 @@
 """
 ML Classifier Module
 =====================
-Load model LightGBM + TF-IDF untuk klasifikasi tiket.
-Uses domain-aware preprocessing for consistency.
+Modul untuk klasifikasi tiket menggunakan model LightGBM + TF-IDF.
+
+File ini bertanggung jawab untuk:
+- Load model ML dari disk (LightGBM booster + TF-IDF vectorizer)
+- Preprocessing text menggunakan domain-aware preprocessor
+- Prediksi kategori Symtomps dari text tiket
+- Hot reload model tanpa restart bot
+
+Model Flow:
+    1. Terima text dari teknisi + solving dari ops
+    2. Preprocess: lowercase, normalisasi abbreviation, merge text
+    3. Vectorize: TF-IDF word (1-3 ngram) + char (3-5 ngram)
+    4. Predict: LightGBM booster predict probabilities
+    5. Return: label dengan confidence tertinggi + status
+
+Confidence Thresholds:
+    - AUTO (>= 80%): Langsung pakai, isi Symtomps otomatis
+    - HIGH_REVIEW (70-80%): Perlu review tapi kemungkinan benar
+    - MEDIUM_REVIEW (50-70%): Review prioritas medium
+    - MANUAL (< 50%): Harus review manual, prediksi tidak reliable
+
+Model Versioning:
+    - Support versioned folders: models/v1/, models/v2/
+    - Auto-detect versi dari current_version.txt
+    - Hot reload via reload() method
 """
 from __future__ import annotations
 
@@ -40,7 +63,26 @@ THRESHOLD_MEDIUM = 0.50      # 50-70% = MEDIUM_REVIEW
 
 @dataclass
 class PredictionResult:
-    """Hasil prediksi ML classifier."""
+    """
+    Container untuk hasil prediksi ML classifier.
+    
+    Digunakan untuk mengembalikan hasil prediksi beserta metadata
+    yang berguna untuk logging, review, dan monitoring.
+    
+    Attributes:
+        predicted_symtomps: Label kategori yang diprediksi (contoh: "KENDALA ONT/NTE")
+        ml_confidence: Confidence score 0.0 - 1.0 (contoh: 0.85 = 85%)
+        prediction_status: Status berdasarkan threshold (AUTO/HIGH_REVIEW/MEDIUM_REVIEW/MANUAL)
+        inference_time_ms: Waktu prediksi dalam milliseconds
+    
+    Example:
+        PredictionResult(
+            predicted_symtomps="KENDALA ONT/NTE",
+            ml_confidence=0.8523,
+            prediction_status="AUTO",
+            inference_time_ms=15.3
+        )
+    """
     predicted_symtomps: str
     ml_confidence: float
     prediction_status: str  # AUTO, HIGH_REVIEW, MEDIUM_REVIEW, MANUAL
@@ -49,17 +91,45 @@ class PredictionResult:
 
 class MLClassifier:
     """
-    Wrapper untuk ML model classification.
+    Wrapper untuk ML model classification tiket IT Support.
     
-    Uses consistent preprocessing with training pipeline.
+    Class ini mengelola seluruh lifecycle model ML:
+    - Load artifacts dari disk (model, vectorizer, encoder)
+    - Preprocessing text dengan domain-aware rules
+    - Prediksi kategori dengan confidence scoring
+    - Hot reload untuk update model tanpa restart
+    
+    Attributes:
+        _model_dir: Path ke folder models/
+        _version: Versi model yang aktif (v1, v2, dst)
+        _model: LightGBM Booster object
+        _word_tfidf: TF-IDF vectorizer untuk word n-grams
+        _char_tfidf: TF-IDF vectorizer untuk char n-grams
+        _label_encoder: Mapping index -> label
+        _is_loaded: Flag apakah model sudah loaded
+        _model_version: String versi model
+        _metadata: Metadata dari training (F1 score, samples, dll)
+    
+    Model Format Support:
+        - New: Versioned folder (models/v3/lgb_model.txt)
+        - Legacy: Flat files (models/lgb_model_v2.txt)
+    
+    TF-IDF Format Support:
+        - New: Word + Char combined (dictionary dengan 2 vectorizers)
+        - Old: Single TF-IDF (untuk backward compatibility)
     """
     
     def __init__(self, config: "Config") -> None:
         """
-        Initialize classifier dengan load model artifacts.
+        Inisialisasi classifier dan load model artifacts dari disk.
+        
+        Saat init:
+        1. Resolve versi model (auto atau spesifik)
+        2. Load LightGBM model, TF-IDF vectorizer, label encoder
+        3. Load metadata untuk info training
         
         Args:
-            config: Configuration object containing model_dir and model_version
+            config: Object konfigurasi yang berisi model_dir dan model_version
         """
         self._model_dir = config.model_dir
         self._version = self._resolve_version(config.model_version, config.model_dir)
@@ -77,10 +147,19 @@ class MLClassifier:
     
     def _resolve_version(self, version: str, model_dir: Path) -> str:
         """
-        Resolve version string to actual version.
+        Resolve version string ke versi aktual.
         
-        If version is "auto", read from current_version.txt.
-        Otherwise return as-is.
+        Kalau version = "auto":
+            Baca dari current_version.txt (contoh: "v3")
+        Kalau version spesifik:
+            Return langsung (contoh: "v2")
+        
+        Args:
+            version: String versi ("auto" atau "v1", "v2", dst)
+            model_dir: Path ke folder models/
+            
+        Returns:
+            String versi aktual (contoh: "v3")
         """
         if version.lower() == "auto":
             current_version_file = model_dir / "current_version.txt"
@@ -97,7 +176,19 @@ class MLClassifier:
         """
         Load semua model artifacts dari disk.
         
-        Supports two formats:
+        Artifacts yang di-load:
+        1. lgb_model.txt/.bin - LightGBM Booster model
+        2. tfidf_vectorizer.pkl - TF-IDF vectorizer (word + char)
+        3. label_encoder.pkl - Mapping index ke label
+        4. metadata.json - Info training (version, F1, samples)
+        
+        Format Support:
+        - New: Versioned folder (models/v3/lgb_model.txt)
+        - Legacy: Flat files (models/lgb_model_v2.txt)
+        
+        TF-IDF Format:
+        - New: Dictionary {word_tfidf, char_tfidf} untuk combined features
+        - Old: Single TfidfVectorizer object
         1. New: Versioned folders (models/v3/lgb_model.txt)
         2. Legacy: Flat files (models/lgb_model_v2.txt)
         """
@@ -189,14 +280,24 @@ class MLClassifier:
     
     def reload(self, new_version: Optional[str] = None) -> bool:
         """
-        Hot reload model dari disk tanpa restart.
+        Hot reload model dari disk tanpa perlu restart bot.
+        
+        Berguna untuk:
+        - Update ke model baru setelah retrain
+        - Rollback ke versi sebelumnya
+        - Refresh model saat ada perubahan
+        
+        Flow:
+        1. Reset semua state (model, tfidf, encoder)
+        2. Load ulang dari disk dengan versi baru/current
+        3. Return status sukses/gagal
         
         Args:
-            new_version: Optional new version to load (e.g., 'v3'). 
-                        If None, reload current version.
+            new_version: Versi baru yang akan di-load (contoh: 'v3')
+                        Kalau None, reload versi current
         
         Returns:
-            True if reload successful, False otherwise
+            True jika reload sukses, False jika gagal
         """
         old_version = self._model_version
         
@@ -227,7 +328,21 @@ class MLClassifier:
             return False
     
     def _get_prediction_status(self, confidence: float) -> str:
-        """Determine prediction status based on confidence threshold."""
+        """
+        Tentukan status prediksi berdasarkan confidence threshold.
+        
+        Thresholds:
+        - >= 80%: AUTO (langsung pakai)
+        - 70-80%: HIGH_REVIEW (kemungkinan benar, perlu konfirmasi)
+        - 50-70%: MEDIUM_REVIEW (prioritas review medium)
+        - < 50%: MANUAL (harus review, prediksi tidak reliable)
+        
+        Args:
+            confidence: Score confidence 0.0 - 1.0
+            
+        Returns:
+            String status: AUTO, HIGH_REVIEW, MEDIUM_REVIEW, atau MANUAL
+        """
         if confidence >= THRESHOLD_AUTO:
             return "AUTO"
         elif confidence >= THRESHOLD_HIGH:
@@ -239,14 +354,28 @@ class MLClassifier:
     
     def predict(self, tech_raw_text: str, solving: str = "") -> PredictionResult:
         """
-        Predict symptom category dari tech message dan solving text.
+        Prediksi kategori Symtomps dari text tiket teknisi dan solving ops.
+        
+        Ini adalah FUNGSI UTAMA untuk klasifikasi tiket.
+        
+        Flow:
+        1. Preprocess text (lowercase, normalisasi, merge)
+        2. Vectorize dengan TF-IDF (word + char n-grams)
+        3. Predict dengan LightGBM booster
+        4. Return label dengan confidence tertinggi
         
         Args:
-            tech_raw_text: Raw text dari teknisi
-            solving: Text solving dari ops (optional, untuk better accuracy)
+            tech_raw_text: Raw text dari message teknisi (caption/text)
+            solving: Text solving dari ops (opsional, untuk akurasi lebih baik)
         
         Returns:
-            PredictionResult dengan predicted label, confidence, dan status
+            PredictionResult berisi:
+            - predicted_symtomps: Label kategori (contoh: \"KENDALA ONT/NTE\")
+            - ml_confidence: Confidence 0.0-1.0
+            - prediction_status: AUTO/HIGH_REVIEW/MEDIUM_REVIEW/MANUAL
+            - inference_time_ms: Waktu prediksi dalam ms
+        
+        Kalau model belum loaded: return empty prediction dengan status MANUAL
         """
         start_time = time.time()
         
@@ -322,17 +451,17 @@ class MLClassifier:
     
     @property
     def is_loaded(self) -> bool:
-        """Check apakah model sudah loaded."""
+        """Cek apakah model sudah berhasil di-load dari disk."""
         return self._is_loaded
     
     @property
     def model_version(self) -> str:
-        """Get model version."""
+        """Get versi model yang aktif (contoh: 'v1', 'v2')."""
         return self._model_version
     
     @property
     def num_classes(self) -> int:
-        """Get jumlah classes."""
+        """Get jumlah kategori/class yang bisa diprediksi."""
         if self._label_encoder:
             if isinstance(self._label_encoder, dict):
                 return len(self._label_encoder)
@@ -340,7 +469,12 @@ class MLClassifier:
         return 0
     
     def get_model_info(self) -> dict:
-        """Get info model untuk reporting."""
+        """
+        Get info ringkas model untuk reporting.
+        
+        Returns:
+            Dictionary berisi version, is_loaded, num_classes, thresholds
+        """
         return {
             "version": self._model_version,
             "is_loaded": self._is_loaded,
@@ -353,7 +487,18 @@ class MLClassifier:
         }
     
     def get_metadata(self) -> dict:
-        """Get full model metadata for admin commands."""
+        """
+        Get metadata lengkap model untuk admin commands.
+        
+        Digunakan oleh /modelstatus untuk menampilkan:
+        - Versi model aktif
+        - Jumlah classes dan list nama classes
+        - Thresholds (AUTO, HIGH, MEDIUM)
+        - Training info (samples, accuracy, trained_at)
+        
+        Returns:
+            Dictionary dengan semua metadata model
+        """
         # Get classes list
         if self._label_encoder:
             if isinstance(self._label_encoder, dict):

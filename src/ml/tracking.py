@@ -1,7 +1,20 @@
 """
 ML Tracking & Monitoring Module
 ================================
-Handle logging ke ML_Tracking sheet dan Monitoring stats.
+
+Modul ini menangani logging prediksi ML ke sheet ML_Tracking dan 
+stats monitoring ke sheet Monitoring di Google Sheets.
+
+Sheet ML_Tracking digunakan untuk:
+- Menyimpan audit trail setiap prediksi ML
+- Review dan koreksi prediksi oleh admin
+- Menyediakan data training untuk retrain model
+
+Sheet Monitoring digunakan untuk:
+- Stats agregat per jam untuk monitoring performa
+- Tracking akurasi dan confidence model
+
+Author: Bagas Aulia Alfasyam
 """
 from __future__ import annotations
 
@@ -26,11 +39,27 @@ MONITORING_SHEET = "Monitoring"
 
 class MLTrackingClient:
     """
-    Client untuk logging ML predictions ke sheet terpisah.
+    Client untuk logging prediksi ML ke Google Sheets.
     
-    Sheets:
-    - ML_Tracking: Audit trail setiap prediksi (untuk review & retrain)
-    - Monitoring: Stats harian agregat
+    Sheets yang dikelola:
+        - ML_Tracking: Audit trail setiap prediksi untuk review & retrain.
+                      Struktur 7 kolom: tech_message_id, tech_raw_text, solving,
+                      Symtomps, ml_confidence, review_status, created_at
+        - Monitoring: Stats agregat per jam untuk monitoring performa model.
+    
+    Flow review_status:
+        - pending: Menunggu review admin (untuk HIGH/MEDIUM/MANUAL)
+        - auto_approved: Auto disetujui karena confidence >= 80% (AUTO)
+        - APPROVED: Admin menyetujui prediksi ML sudah benar
+        - CORRECTED: Admin mengoreksi prediksi yang salah (edit Symtomps)
+        - TRAINED: Sudah digunakan untuk training model
+    
+    Attributes:
+        _config: Konfigurasi aplikasi
+        _spreadsheet: Instance gspread Spreadsheet
+        _tracking_sheet: Worksheet ML_Tracking
+        _monitoring_sheet: Worksheet Monitoring
+        _tz: Timezone untuk timestamp (default Asia/Jakarta)
     """
     
     def __init__(self, config: "Config", spreadsheet: Optional[gspread.Spreadsheet] = None) -> None:
@@ -42,7 +71,18 @@ class MLTrackingClient:
         self._connect()
     
     def _connect(self) -> None:
-        """Connect ke spreadsheet dan setup sheets."""
+        """
+        Koneksi ke Google Spreadsheet dan setup sheets.
+        
+        Proses:
+            1. Gunakan spreadsheet yang sudah ada atau buat koneksi baru
+            2. Get atau create sheet ML_Tracking dengan 7 kolom
+            3. Get atau create sheet Monitoring (optional, tidak fatal jika gagal)
+        
+        Raises:
+            GSpreadException: Jika gagal koneksi ke spreadsheet
+            APIError: Jika API Google Sheets error
+        """
         try:
             # Reuse spreadsheet if provided, otherwise create new connection
             if self._spreadsheet is None:
@@ -85,7 +125,16 @@ class MLTrackingClient:
             raise
     
     def _get_or_create_sheet(self, sheet_name: str, headers: list[str]) -> gspread.Worksheet:
-        """Get existing sheet atau create baru dengan headers."""
+        """
+        Ambil sheet yang sudah ada atau buat baru jika belum ada.
+        
+        Args:
+            sheet_name: Nama sheet yang dicari/dibuat
+            headers: List header kolom untuk sheet baru
+            
+        Returns:
+            gspread.Worksheet: Instance worksheet yang berhasil diakses/dibuat
+        """
         try:
             worksheet = self._spreadsheet.worksheet(sheet_name)
             _LOGGER.debug("Found existing sheet: %s", sheet_name)
@@ -108,17 +157,32 @@ class MLTrackingClient:
         prediction_result: "PredictionResult",
     ) -> None:
         """
-        Log prediksi ke ML_Tracking sheet.
+        Simpan prediksi ML ke sheet ML_Tracking untuk audit trail.
         
-        All predictions are logged:
-        - AUTO: review_status = "auto_approved" (no review needed)
-        - HIGH/MEDIUM/MANUAL: review_status = "pending" (needs review)
+        Semua prediksi di-log dengan aturan review_status:
+            - AUTO (confidence >= 80%): review_status = "auto_approved"
+              Tidak perlu review karena confidence tinggi
+            - HIGH/MEDIUM/MANUAL: review_status = "pending"
+              Perlu review admin untuk memastikan prediksi benar
+        
+        Kolom yang disimpan:
+            0. tech_message_id: ID pesan Telegram teknisi
+            1. tech_raw_text: Teks mentah dari teknisi (max 500 char)
+            2. solving: Teks solving dari ops (max 500 char)
+            3. Symtomps: Hasil prediksi ML (bisa di-edit admin jika salah)
+            4. ml_confidence: Nilai confidence 0.0 - 1.0
+            5. review_status: Status review (pending/auto_approved)
+            6. created_at: Timestamp kapan data dibuat
         
         Args:
-            tech_message_id: Telegram message ID dari teknisi
-            tech_raw_text: Raw text dari teknisi
-            solving: Text solving dari ops
-            prediction_result: Hasil prediksi dari MLClassifier
+            tech_message_id: Telegram message ID dari pesan teknisi
+            tech_raw_text: Teks mentah reply teknisi
+            solving: Teks solving yang diekstrak dari pesan ops
+            prediction_result: Hasil prediksi dari MLClassifier.predict()
+        
+        Note:
+            Method ini dipanggil SETELAH data berhasil ditulis ke Logs sheet
+            untuk menjaga konsistensi data (tidak ada orphan di ML_Tracking).
         """
         if not self._tracking_sheet:
             _LOGGER.warning("Tracking sheet not connected, skipping log")
@@ -167,8 +231,20 @@ class MLTrackingClient:
         """
         Update atau insert stats per jam ke Monitoring sheet.
         
+        Jika sudah ada row untuk jam tersebut, update row yang ada.
+        Jika belum ada, append row baru.
+        
         Args:
-            datetime_hour: Format "YYYY-MM-DD HH:00" (e.g., "2026-01-23 14:00")
+            datetime_hour: Jam dalam format "YYYY-MM-DD HH:00" (contoh: "2026-01-23 14:00")
+            model_version: Versi model yang sedang digunakan (contoh: "v1")
+            total_predictions: Total prediksi dalam jam tersebut
+            avg_confidence: Rata-rata confidence (0-100%)
+            auto_count: Jumlah prediksi AUTO (confidence >= 80%)
+            high_count: Jumlah prediksi HIGH (confidence 70-80%)
+            medium_count: Jumlah prediksi MEDIUM (confidence 50-70%)
+            manual_count: Jumlah prediksi MANUAL (confidence < 50%)
+            reviewed_count: Jumlah yang sudah di-review
+            accuracy: Persentase akurasi (0-100%)
         """
         if not self._monitoring_sheet:
             _LOGGER.warning("Monitoring sheet not connected, skipping stats")
@@ -224,7 +300,12 @@ class MLTrackingClient:
         reviewed_count: int = 0,
         accuracy: float = 0.0,
     ) -> None:
-        """Backward compatibility wrapper - now updates hourly."""
+        """
+        Wrapper backward compatibility - sekarang update per jam.
+        
+        Alias ini dipertahankan untuk kompatibilitas dengan kode lama.
+        Secara internal memanggil update_hourly_stats() dengan jam saat ini.
+        """
         now = datetime.now(self._tz)
         datetime_hour = now.strftime("%Y-%m-%d %H:00")
         self.update_hourly_stats(
@@ -242,8 +323,23 @@ class MLTrackingClient:
     
     def get_today_stats(self) -> dict:
         """
-        Get aggregated stats untuk hari ini dari Monitoring sheet.
-        Sums all hourly rows for today's date.
+        Ambil stats agregat untuk hari ini dari Monitoring sheet.
+        
+        Menghitung total semua row per jam untuk tanggal hari ini.
+        Confidence dihitung weighted average berdasarkan jumlah prediksi.
+        
+        Returns:
+            dict dengan keys:
+                - date: Tanggal hari ini (YYYY-MM-DD)
+                - total_predictions: Total prediksi hari ini
+                - avg_confidence: Rata-rata confidence (weighted)
+                - auto_count: Jumlah AUTO
+                - high_count: Jumlah HIGH
+                - medium_count: Jumlah MEDIUM
+                - manual_count: Jumlah MANUAL
+                - reviewed_count: Jumlah yang sudah di-review
+                - accuracy: Persentase akurasi
+                - model_version: Versi model terakhir
         """
         if not self._monitoring_sheet:
             return {}
@@ -311,7 +407,17 @@ class MLTrackingClient:
             return {}
     
     def get_current_hour_stats(self) -> dict:
-        """Get stats untuk jam ini dari Monitoring sheet."""
+        """
+        Ambil stats untuk jam saat ini dari Monitoring sheet.
+        
+        Mencari row dengan datetime_hour yang cocok dengan jam sekarang.
+        
+        Returns:
+            dict dengan stats jam ini, atau {} jika tidak ada data.
+            Keys: datetime_hour, total_predictions, avg_confidence, 
+                  auto_count, high_count, medium_count, manual_count,
+                  reviewed_count, accuracy, model_version
+        """
         if not self._monitoring_sheet:
             return {}
         
@@ -344,8 +450,25 @@ class MLTrackingClient:
     
     def get_realtime_stats(self) -> dict:
         """
-        Get real-time stats directly from ML_Tracking sheet.
-        This is calculated on-the-fly instead of using cached Monitoring sheet.
+        Hitung stats real-time langsung dari ML_Tracking sheet.
+        
+        Berbeda dengan get_today_stats() yang membaca Monitoring sheet,
+        method ini menghitung langsung dari data mentah ML_Tracking.
+        Lebih akurat untuk data terkini tapi lebih lambat.
+        
+        Threshold confidence level:
+            - auto_count: >= 90% confidence
+            - high_count: 70-90% confidence  
+            - medium_count: 50-70% confidence
+            - manual_count: < 50% confidence
+        
+        Returns:
+            dict dengan keys:
+                - total_predictions: Total semua prediksi
+                - avg_confidence: Rata-rata confidence (0-100%)
+                - auto_count, high_count, medium_count, manual_count
+                - reviewed_count: Sudah APPROVED/CORRECTED/TRAINED/auto_approved
+                - pending_count: Masih menunggu review
         """
         if not self._tracking_sheet:
             return {}
@@ -412,7 +535,19 @@ class MLTrackingClient:
             return {}
     
     def get_pending_review_count(self) -> dict:
-        """Hitung jumlah rows yang butuh review (belum APPROVED/CORRECTED)."""
+        """
+        Hitung jumlah prediksi yang masih menunggu review.
+        
+        Review diperlukan untuk memastikan prediksi ML benar sebelum
+        data digunakan untuk training ulang model.
+        
+        Returns:
+            dict dengan keys:
+                - total_pending: Total semua yang pending
+                - manual_pending: Pending untuk MANUAL
+                - high_review_pending: Pending untuk HIGH
+                - medium_review_pending: Pending untuk MEDIUM
+        """
         if not self._tracking_sheet:
             return {"total_pending": 0, "manual_pending": 0, "high_review_pending": 0, "medium_review_pending": 0}
         
@@ -447,15 +582,44 @@ class MLTrackingClient:
             return {"total_pending": 0, "manual_pending": 0, "high_review_pending": 0, "medium_review_pending": 0}
     
     def get_weekly_stats(self, days: int = 7) -> dict:
-        """Get aggregated stats untuk N hari terakhir."""
+        """
+        Ambil stats agregat untuk N hari terakhir.
+        
+        Args:
+            days: Jumlah hari ke belakang (default 7 hari)
+            
+        Returns:
+            dict dengan stats agregat dari Monitoring sheet
+        """
         return self._get_aggregated_stats(days)
     
     def get_monthly_stats(self) -> dict:
-        """Get aggregated stats untuk 30 hari terakhir."""
+        """
+        Ambil stats agregat untuk 30 hari terakhir.
+        
+        Returns:
+            dict dengan stats agregat dari Monitoring sheet
+        """
         return self._get_aggregated_stats(30)
     
     def _get_aggregated_stats(self, days: int) -> dict:
-        """Internal method to get aggregated stats for N days."""
+        """
+        Internal method untuk menghitung stats agregat N hari terakhir.
+        
+        Mengambil N row terakhir dari Monitoring sheet dan menghitung:
+            - Total prediksi
+            - Weighted average confidence
+            - Count per kategori (AUTO/HIGH/MEDIUM/MANUAL)
+            - Average accuracy
+        
+        Args:
+            days: Jumlah hari/row terakhir yang diambil
+            
+        Returns:
+            dict dengan keys: days, total_predictions, avg_confidence,
+            auto_count, high_review_count, medium_review_count,
+            manual_count, reviewed_count, accuracy
+        """
         if not self._monitoring_sheet:
             return {}
         
@@ -517,7 +681,15 @@ class MLTrackingClient:
             return {}
     
     def get_reviewed_count(self) -> int:
-        """Get count of reviewed predictions ready for training (APPROVED + CORRECTED)."""
+        """
+        Hitung jumlah prediksi yang sudah di-review dan siap training.
+        
+        Status yang dihitung: APPROVED dan CORRECTED.
+        Data dengan status ini bisa digunakan untuk retrain model.
+        
+        Returns:
+            int: Jumlah row yang siap untuk training
+        """
         if not self._tracking_sheet:
             return 0
         
@@ -546,10 +718,15 @@ class MLTrackingClient:
     
     def get_reviewed_class_distribution(self) -> dict[str, int]:
         """
-        Get class distribution for reviewed predictions ready for training.
+        Hitung distribusi kelas untuk prediksi yang siap training.
+        
+        Menghitung berapa banyak data per kategori Symtomps yang sudah
+        di-review (APPROVED/CORRECTED) dan siap digunakan untuk training.
+        
+        Berguna untuk melihat apakah ada class imbalance sebelum retrain.
         
         Returns:
-            dict: {class_name: count} for APPROVED/CORRECTED rows
+            dict: {nama_kelas: jumlah} contoh {"FO Cut": 15, "Modem Rusak": 8}
         """
         if not self._tracking_sheet:
             return {}
@@ -584,11 +761,14 @@ class MLTrackingClient:
     
     def get_trained_count(self) -> int:
         """
-        Get count of already trained data.
+        Hitung jumlah total data yang sudah digunakan untuk training.
         
-        Includes:
-        - ML_Tracking rows with TRAINED status
-        - Logs rows where Symtomps is filled (historical training data)
+        Sumber data training:
+            1. ML_Tracking rows dengan status TRAINED
+            2. Logs rows yang kolom Symtomps-nya terisi (data historis)
+        
+        Returns:
+            int: Total jumlah data training yang sudah digunakan
         """
         count = 0
         
@@ -626,13 +806,21 @@ class MLTrackingClient:
     
     def mark_as_trained(self, row_indices: list[int] = None) -> int:
         """
-        Mark reviewed rows as TRAINED after successful training.
+        Tandai row yang sudah di-review sebagai TRAINED setelah training berhasil.
+        
+        Dipanggil setelah retrain model sukses untuk menandai data mana saja
+        yang sudah digunakan untuk training. Ini mencegah data yang sama
+        digunakan ulang di training berikutnya.
         
         Args:
-            row_indices: Specific row indices to mark, or None to mark all APPROVED/CORRECTED
-            
+            row_indices: Indeks row spesifik yang akan ditandai, atau None
+                        untuk menandai semua APPROVED/CORRECTED
+        
         Returns:
-            Number of rows marked as TRAINED
+            int: Jumlah row yang berhasil ditandai TRAINED
+        
+        Note:
+            Update dilakukan dalam batch 100 row untuk menghindari rate limit.
         """
         if not self._tracking_sheet:
             return 0
@@ -677,11 +865,28 @@ class MLTrackingClient:
 
     def calculate_and_update_hourly_stats(self, model_version: str = "unknown") -> dict:
         """
-        Hitung stats per jam dari ML_Tracking sheet dan update ke Monitoring sheet.
-        Only counts rows from the current hour based on created_at column.
+        Hitung stats per jam dari ML_Tracking dan update ke Monitoring sheet.
+        
+        Method ini:
+            1. Baca semua data dari ML_Tracking
+            2. Filter hanya row untuk jam saat ini (berdasarkan created_at)
+            3. Hitung total, confidence, dan distribusi status
+            4. Update/insert ke Monitoring sheet
+        
+        Threshold confidence level:
+            - auto_count: >= 90% confidence
+            - high_count: 70-90% confidence
+            - medium_count: 50-70% confidence
+            - manual_count: < 50% confidence (pending)
+        
+        Args:
+            model_version: Versi model yang digunakan (contoh: "v1")
         
         Returns:
-            dict dengan stats untuk jam ini
+            dict dengan stats jam ini termasuk:
+                datetime_hour, total_predictions, avg_confidence,
+                auto_count, high_count, medium_count, manual_count,
+                reviewed_count, accuracy, model_version
         """
         if not self._tracking_sheet:
             _LOGGER.warning("Tracking sheet not connected, cannot calculate stats")
@@ -786,5 +991,9 @@ class MLTrackingClient:
     
     # Backward compatibility alias
     def calculate_and_update_daily_stats(self, model_version: str = "unknown") -> dict:
-        """Backward compatibility - now calculates hourly stats."""
+        """
+        Alias backward compatibility - sekarang menghitung per jam.
+        
+        Dipertahankan untuk kompatibilitas kode lama yang memanggil method ini.
+        """
         return self.calculate_and_update_hourly_stats(model_version)
