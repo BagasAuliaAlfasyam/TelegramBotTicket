@@ -425,6 +425,7 @@ class OpsCollector:
                 text=text,
                 reply_to_message_id=reply_to_id,
                 disable_notification=False,
+                parse_mode="Markdown",
             )
         except Exception:
             _LOGGER.warning("Reporting bot failed to send notification", exc_info=True)
