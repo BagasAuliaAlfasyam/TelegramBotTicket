@@ -316,14 +316,8 @@ class OpsCollector:
             else:
                 symtomps_label = ""  # Kosongkan untuk review manual
             
-            # Log ke ML_Tracking untuk audit trail (semua prediksi)
-            if self._ml_tracking:
-                self._ml_tracking.log_prediction(
-                    tech_message_id=int(tech_message_id_str),
-                    tech_raw_text=tech_raw_text,
-                    solving=solving_text,
-                    prediction_result=ml_prediction,
-                )
+            # NOTE: log_prediction ke ML_Tracking dipindah ke SETELAH Logs sukses
+            # untuk menghindari inkonsistensi data (ML_Tracking ada, Logs kosong)
             
             _LOGGER.info(
                 "ML Prediction: %s (%.1f%%) - %s -> Logs Symtomps: %s",
@@ -366,6 +360,43 @@ class OpsCollector:
                         self._state.set_row_idx((chat_id_str, tech_message_id_str), ack_idx)
                     else:
                         self._sheets.append_log_row(row)
+            
+            # Log ke ML_Tracking SETELAH Logs sukses (untuk konsistensi data)
+            # Retry 3x dengan delay, notify admin kalau tetap gagal
+            if ml_prediction and self._ml_tracking:
+                solving_text = parsed["solving"] if parsed else ""
+                ml_tracking_success = False
+                
+                for attempt in range(3):
+                    try:
+                        self._ml_tracking.log_prediction(
+                            tech_message_id=int(tech_message_id_str),
+                            tech_raw_text=tech_raw_text,
+                            solving=solving_text,
+                            prediction_result=ml_prediction,
+                        )
+                        ml_tracking_success = True
+                        break
+                    except Exception as e:
+                        _LOGGER.warning(
+                            "ML_Tracking attempt %d/3 failed: %s", 
+                            attempt + 1, str(e)
+                        )
+                        if attempt < 2:  # Not last attempt
+                            import time
+                            time.sleep(0.5)  # 500ms delay before retry
+                
+                if not ml_tracking_success:
+                    _LOGGER.exception("ML_Tracking failed after 3 attempts (Logs already saved)")
+                    # Notify admin about ML_Tracking failure
+                    await self._safe_notify(
+                        chat_id=notification_chat_id,
+                        text=f"⚠️ ML_Tracking gagal setelah 3x retry.\n"
+                             f"Data Logs sudah tersimpan, tapi ML_Tracking perlu dicek manual.\n"
+                             f"Message ID: {tech_message_id_str}",
+                        reply_to_id=None,
+                    )
+                    
         except Exception:
             _LOGGER.exception("Failed to append row to Google Sheets")
             await self._safe_notify(
