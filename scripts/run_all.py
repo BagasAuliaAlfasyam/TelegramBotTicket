@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Add project root to path
@@ -149,12 +149,13 @@ async def run_monitoring_scheduler(
     ml_classifier: MLClassifier | None,
     ml_tracking: MLTrackingClient | None,
     logger: logging.Logger,
-    interval_seconds: int = 3600,  # 1 hour default
+    timezone_str: str = "Asia/Jakarta",
 ) -> None:
     """
-    Background scheduler untuk update stats Monitoring sheet per jam.
+    Background scheduler untuk update stats Monitoring sheet per jam tepat.
     
-    Menghitung statistik dari ML_Tracking untuk jam saat ini dan
+    Scheduler akan trigger di menit ke-00 setiap jam (contoh: 15:00, 16:00).
+    Menghitung statistik dari ML_Tracking untuk jam sebelumnya dan
     menyimpan ke Monitoring sheet dengan granularitas per jam.
     
     Stats yang dihitung:
@@ -167,18 +168,28 @@ async def run_monitoring_scheduler(
         ml_classifier: ML classifier untuk mendapat model version
         ml_tracking: ML tracking client untuk akses sheet
         logger: Logger instance
-        interval_seconds: Interval update dalam detik (default 1 jam)
+        timezone_str: Timezone untuk scheduling (default Asia/Jakarta)
     """
     if not ml_tracking:
         logger.warning("ML Tracking not initialized, monitoring scheduler disabled")
         return
     
-    logger.info("Starting Hourly Monitoring Scheduler (interval: %d seconds)", interval_seconds)
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(timezone_str)
+    
+    logger.info("Starting Hourly Monitoring Scheduler (trigger at :00 every hour, timezone: %s)", timezone_str)
     
     try:
         while True:
-            # Wait for the interval first (stats at startup might be empty)
-            await asyncio.sleep(interval_seconds)
+            # Calculate seconds until next hour (:00)
+            now = datetime.now(tz)
+            next_hour = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+            wait_seconds = (next_hour - now).total_seconds()
+            
+            logger.info("Scheduler: Next update at %s (in %.0f seconds)", 
+                       next_hour.strftime("%Y-%m-%d %H:%M"), wait_seconds)
+            
+            await asyncio.sleep(wait_seconds)
             
             try:
                 model_version = ml_classifier.model_version if ml_classifier else "unknown"
@@ -254,13 +265,13 @@ async def main_async(
     )
     tasks.append(reporting_task)
     
-    # Monitoring scheduler task (hourly stats update)
+    # Monitoring scheduler task (hourly stats update at :00)
     scheduler_task = asyncio.create_task(
         run_monitoring_scheduler(
             ml_classifier=ml_classifier,
             ml_tracking=ml_tracking,
             logger=logger,
-            interval_seconds=3600,  # 1 hour
+            timezone_str=config.timezone or "Asia/Jakarta",
         ),
         name="monitoring_scheduler"
     )
@@ -268,7 +279,7 @@ async def main_async(
     
     logger.info("=" * 50)
     logger.info("All bots are running. Press Ctrl+C to stop.")
-    logger.info("Monitoring stats update: every 1 hour")
+    logger.info("Monitoring stats update: every hour at :00")
     logger.info("=" * 50)
     
     # Wait for all tasks, handle shutdown gracefully
