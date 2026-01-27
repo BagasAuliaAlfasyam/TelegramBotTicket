@@ -92,13 +92,14 @@ class MLTrackingClient:
                 self._spreadsheet = client.open(self._config.google_spreadsheet_name)
             
             # Get or create ML_Tracking sheet
-            # 7 columns: added created_at for hourly tracking
-            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status, 6=created_at
+            # 7 columns: match with actual sheet structure
+            # 0=tech message id, 1=tech raw text, 2=solving, 3=Symtomps, 
+            # 4=ml_confidence, 5=review_status, 6=Timestamps
             self._tracking_sheet = self._get_or_create_sheet(
                 ML_TRACKING_SHEET,
                 headers=[
                     "tech message id", "tech raw text", "solving",
-                    "Symtomps", "ml_confidence", "review_status", "created_at"
+                    "Symtomps", "ml_confidence", "review_status", "Timestamps"
                 ]
             )
             
@@ -183,10 +184,15 @@ class MLTrackingClient:
         Note:
             Method ini dipanggil SETELAH data berhasil ditulis ke Logs sheet
             untuk menjaga konsistensi data (tidak ada orphan di ML_Tracking).
+        
+        Raises:
+            RuntimeError: Jika tracking sheet tidak terkoneksi
+            GSpreadException: Jika gagal menulis ke Google Sheets
+            APIError: Jika API Google error
         """
         if not self._tracking_sheet:
-            _LOGGER.warning("Tracking sheet not connected, skipping log")
-            return
+            _LOGGER.error("Tracking sheet not connected!")
+            raise RuntimeError("ML_Tracking sheet not connected")
         
         # AUTO predictions are auto-approved, others need review
         if prediction_result.prediction_status == "AUTO":
@@ -210,10 +216,50 @@ class MLTrackingClient:
             ]
             
             self._tracking_sheet.append_row(row, value_input_option='RAW')
-            _LOGGER.debug("Logged prediction for message %s", tech_message_id)
+            _LOGGER.info("Logged prediction for message %s to ML_Tracking", tech_message_id)
             
         except (GSpreadException, APIError) as exc:
-            _LOGGER.exception("Failed to log prediction: %s", exc)
+            _LOGGER.warning("ML_Tracking write failed, attempting reconnect: %s", exc)
+            # Coba reconnect dan retry sekali
+            try:
+                self._reconnect_tracking_sheet()
+                row = [
+                    str(tech_message_id),
+                    tech_raw_text[:500] if tech_raw_text else "",
+                    solving[:500] if solving else "",
+                    prediction_result.predicted_symtomps,
+                    prediction_result.ml_confidence,
+                    review_status,
+                    created_at,
+                ]
+                self._tracking_sheet.append_row(row, value_input_option='RAW')
+                _LOGGER.info("Logged prediction for message %s after reconnect", tech_message_id)
+            except Exception as retry_exc:
+                _LOGGER.exception("Failed to log prediction after reconnect: %s", retry_exc)
+                raise  # PENTING: Re-raise agar retry di collector.py berjalan!
+    
+    def _reconnect_tracking_sheet(self) -> None:
+        """
+        Reconnect ke ML_Tracking sheet saat koneksi terputus.
+        
+        Dipanggil secara otomatis saat append_row gagal dengan GSpreadException.
+        Membuat koneksi baru ke Google Sheets dan refresh worksheet reference.
+        
+        Raises:
+            GSpreadException: Jika reconnect gagal
+        """
+        _LOGGER.info("Reconnecting to ML_Tracking sheet...")
+        try:
+            # Buat koneksi baru
+            client = gspread.service_account(
+                filename=str(self._config.google_service_account_json)
+            )
+            self._spreadsheet = client.open(self._config.google_spreadsheet_name)
+            self._tracking_sheet = self._spreadsheet.worksheet(ML_TRACKING_SHEET)
+            _LOGGER.info("Successfully reconnected to ML_Tracking sheet")
+        except Exception as e:
+            _LOGGER.exception("Reconnect failed: %s", e)
+            raise
     
     def update_hourly_stats(
         self,
@@ -493,9 +539,10 @@ class MLTrackingClient:
                 if len(row) < 6:
                     continue
                 
-                # Confidence (index 4)
+                # Confidence (index 4) - handle comma as decimal separator
                 try:
-                    confidence = float(row[4]) if row[4] else 0.0
+                    conf_str = row[4].replace(",", ".") if row[4] else "0.0"
+                    confidence = float(conf_str)
                     confidence_sum += confidence
                     
                     # Count by confidence level
@@ -923,9 +970,10 @@ class MLTrackingClient:
                 
                 total_predictions += 1
                 
-                # Confidence (index 4)
+                # Confidence (index 4) - handle comma as decimal separator
                 try:
-                    confidence = float(row[4]) if row[4] else 0.0
+                    conf_str = row[4].replace(",", ".") if row[4] else "0.0"
+                    confidence = float(conf_str)
                     confidence_sum += confidence
                     
                     # Count by confidence level
