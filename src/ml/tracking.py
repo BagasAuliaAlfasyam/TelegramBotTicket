@@ -19,7 +19,7 @@ Author: Bagas Aulia Alfasyam
 from __future__ import annotations
 
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
@@ -941,8 +941,12 @@ class MLTrackingClient:
         
         try:
             now = datetime.now(self._tz)
-            datetime_hour = now.strftime("%Y-%m-%d %H:00")
-            hour_prefix = now.strftime("%Y-%m-%d %H:")  # For matching "2026-01-23 14:XX"
+            # Calculate stats for PREVIOUS hour (scheduler runs at :00, so we summarize the completed hour)
+            previous_hour = now - timedelta(hours=1)
+            datetime_hour = previous_hour.strftime("%Y-%m-%d %H:00")
+            hour_prefix = previous_hour.strftime("%Y-%m-%d %H:")  # For matching "2026-01-27 14:XX"
+            
+            _LOGGER.info("Calculating stats for hour: %s (prefix: %s)", datetime_hour, hour_prefix)
             
             all_data = self._tracking_sheet.get_all_values()
             if len(all_data) <= 1:
@@ -950,7 +954,7 @@ class MLTrackingClient:
                 return {}
             
             # 7-column structure:
-            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status, 6=created_at
+            # 0=tech_message_id, 1=tech_raw_text, 2=solving, 3=Symtomps, 4=ml_confidence, 5=review_status, 6=Timestamps
             total_predictions = 0
             confidence_sum = 0.0
             auto_count = 0
@@ -963,7 +967,7 @@ class MLTrackingClient:
                 if len(row) < 7:
                     continue
                 
-                # Filter by current hour using created_at (index 6)
+                # Filter by previous hour using Timestamps (index 6)
                 created_at = row[6] if len(row) > 6 else ""
                 if not created_at.startswith(hour_prefix):
                     continue
