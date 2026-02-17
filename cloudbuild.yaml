@@ -1,20 +1,38 @@
 # ============================================================
-# Cloud Build - Build & push all microservice images
+# Cloud Build - CI/CD Pipeline
 # ============================================================
-# Builds 5 custom service images in parallel, pushes to
-# Artifact Registry.
+# Complete pipeline: lint → validate → build → push → deploy
 #
-# Usage (manual):
+# Stages:
+#   1. Lint with ruff (code quality)
+#   2. Validate Dockerfiles & docker-compose
+#   3. Build 5 microservice Docker images (parallel)
+#   4. Push images to Artifact Registry
+#   5. Deploy to VM via SSH (if _DEPLOY_ENABLED=true)
+#   6. Health check validation
+#
+# Usage (CI only, no deploy):
 #   gcloud builds submit --config=cloudbuild.yaml \
-#     --substitutions=_IMAGE_TAG=latest
+#     --substitutions=_IMAGE_TAG=latest,_DEPLOY_ENABLED=false
 #
-# Triggered automatically by GitHub Actions on push to main.
+# Usage (Full CI/CD with deploy):
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_IMAGE_TAG=latest,_DEPLOY_ENABLED=true
+#
+# GitHub webhook triggers:
+#   - develop branch: _DEPLOY_ENABLED=false (CI only)
+#   - main branch: _DEPLOY_ENABLED=true (CI + Deploy)
 # ============================================================
 
 substitutions:
   _IMAGE_TAG: "latest"
   _REGION: "asia-southeast2"
   _REPO: "microservices"
+  _LINT_ENABLED: "true"
+  _DEPLOY_ENABLED: "false"
+  _GCP_VM_USER: "bagas"
+  _GCP_VM_NAME: "mytechops"
+  _GCP_VM_ZONE: "asia-southeast2-a"
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -23,7 +41,61 @@ options:
 
 # -- Build steps (parallel where possible) --------------------
 steps:
-  # -- Step 0: Create Artifact Registry repo if not exists --
+  # ========== CI STAGE: Lint & Validate ==========
+
+  # -- Step 1: Lint with ruff --
+  - name: "python:3.11"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        echo "=== Linting with ruff ==="
+        pip install -q ruff
+        ruff check services/ --output-format=github
+    id: "ruff-lint"
+
+  # -- Step 2: Validate Dockerfiles exist --
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        echo "=== Validating Dockerfiles ==="
+        for svc in prediction training data collector admin; do
+          if [ ! -f "services/$svc/Dockerfile" ]; then
+            echo "❌ Missing Dockerfile for $svc"
+            exit 1
+          fi
+          echo "✓ services/$svc/Dockerfile"
+        done
+        echo "✓ All Dockerfiles present"
+    id: "validate-dockerfiles"
+    waitFor: ["ruff-lint"]
+
+  # -- Step 3: Validate docker-compose syntax --
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        echo "=== Validating docker-compose ==="
+        export GOOGLE_SPREADSHEET_NAME=_dummy
+        export AWS_ACCESS_KEY_ID=_dummy
+        export AWS_SECRET_ACCESS_KEY=_dummy
+        export MLFLOW_TRACKING_USERNAME=_dummy
+        export MLFLOW_TRACKING_PASSWORD=_dummy
+        export GEMINI_API_KEY=_dummy
+        export TELEGRAM_BOT_TOKEN_COLLECTING=_dummy
+        export TELEGRAM_BOT_TOKEN_REPORTING=_dummy
+        export ADMIN_USER_IDS=_dummy
+        docker compose -f docker-compose.microservices.yml config --quiet
+        echo "✓ docker-compose.microservices.yml is valid"
+    id: "validate-compose"
+    waitFor: ["validate-dockerfiles"]
+
+  # ========== BUILD STAGE: Docker Build & Push ==========
+
+  # -- Step 4: Create Artifact Registry repo if not exists --
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
     entrypoint: bash
     args:
@@ -36,8 +108,9 @@ steps:
           --location=${_REGION} \
           --description="TelegramBotMyTech microservices"
     id: "create-repo"
+    waitFor: ["validate-compose"]
 
-  # -- Step 1: Build prediction-api -------------------------
+  # -- Step 5: Build prediction-api -------------------------
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
@@ -48,10 +121,10 @@ steps:
       - "-f"
       - "services/prediction/Dockerfile"
       - "."
-    id: "build-prediction"
+    id: "build-prediction-api"
     waitFor: ["create-repo"]
 
-  # -- Step 2: Build training-api ---------------------------
+  # -- Step 6: Build training-api ---------------------------
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
@@ -62,10 +135,10 @@ steps:
       - "-f"
       - "services/training/Dockerfile"
       - "."
-    id: "build-training"
+    id: "build-training-api"
     waitFor: ["create-repo"]
 
-  # -- Step 3: Build data-api ------------------------------
+  # -- Step 7: Build data-api ------------------------------
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
@@ -76,10 +149,10 @@ steps:
       - "-f"
       - "services/data/Dockerfile"
       - "."
-    id: "build-data"
+    id: "build-data-api"
     waitFor: ["create-repo"]
 
-  # -- Step 4: Build collector-bot -------------------------
+  # -- Step 8: Build collector-bot -------------------------
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
@@ -90,10 +163,10 @@ steps:
       - "-f"
       - "services/collector/Dockerfile"
       - "."
-    id: "build-collector"
+    id: "build-collector-bot"
     waitFor: ["create-repo"]
 
-  # -- Step 5: Build admin-bot -----------------------------
+  # -- Step 9: Build admin-bot -----------------------------
   - name: "gcr.io/cloud-builders/docker"
     args:
       - "build"
@@ -104,8 +177,117 @@ steps:
       - "-f"
       - "services/admin/Dockerfile"
       - "."
-    id: "build-admin"
+    id: "build-admin-bot"
     waitFor: ["create-repo"]
+
+  # ========== DEPLOY STAGE: SSH Deploy to VM ==========
+
+  # -- Step 10: Deploy to VM (conditional on _DEPLOY_ENABLED) --
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        if [ "${_DEPLOY_ENABLED}" != "true" ]; then
+          echo "⏭️  Skipping deployment (_DEPLOY_ENABLED=false)"
+          exit 0
+        fi
+
+        echo "=== Deploying to VM ==="
+        echo "VM: ${_GCP_VM_USER}@${_GCP_VM_NAME} (${_GCP_VM_ZONE})"
+
+        gcloud compute ssh ${_GCP_VM_USER}@${_GCP_VM_NAME} \
+          --zone=${_GCP_VM_ZONE} \
+          --quiet \
+          --command="
+            set -e
+            cd ~/TelegramBotMyTech
+
+            # Pull latest code (for compose files, configs)
+            echo '📥 Pulling latest code from GitHub...'
+            git pull origin main --ff-only
+
+            # Set image registry and tag
+            export IMAGE_REGISTRY=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/
+            export IMAGE_TAG=${_IMAGE_TAG}
+
+            # Pull pre-built images from Artifact Registry
+            echo '📦 Pulling Docker images...'
+            docker compose \
+              -f docker-compose.microservices.yml \
+              -f docker-compose.prod.yml \
+              --env-file .env.local \
+              pull prediction-api training-api data-api collector-bot admin-bot
+
+            # Deploy (only recreates changed services)
+            echo '🚀 Deploying services...'
+            docker compose \
+              -f docker-compose.microservices.yml \
+              -f docker-compose.prod.yml \
+              --env-file .env.local \
+              up -d --no-build
+
+            # Wait for services to be ready
+            echo '⏳ Waiting for services to be ready...'
+            sleep 15
+
+            echo '📋 Container status:'
+            docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+          "
+    id: "deploy-to-vm"
+    waitFor: ["build-prediction-api", "build-training-api", "build-data-api", "build-collector-bot", "build-admin-bot"]
+
+  # -- Step 11: Validate deployment with health checks --
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        if [ "${_DEPLOY_ENABLED}" != "true" ]; then
+          echo "⏭️  Skipping health check (_DEPLOY_ENABLED=false)"
+          exit 0
+        fi
+
+        echo "=== Health Check Validation ==="
+
+        gcloud compute ssh ${_GCP_VM_USER}@${_GCP_VM_NAME} \
+          --zone=${_GCP_VM_ZONE} \
+          --quiet \
+          --command="
+            set -e
+            failed=0
+
+            echo '🏥 Checking service health...'
+            for svc in \
+              'prediction-api:8001' \
+              'data-api:8002' \
+              'training-api:8005'; do
+
+              name=\${svc%%:*}
+              port=\${svc##*:}
+
+              echo -n \"  ◌ \$name (\$port)... \"
+
+              if curl -sf http://localhost:\$port/health > /dev/null 2>&1; then
+                echo '✓ healthy'
+              else
+                echo '✗ UNHEALTHY'
+                failed=1
+              fi
+            done
+
+            echo ''
+            echo '📊 Final container status:'
+            docker ps --format 'table {{.Names}}\t{{.Status}}'
+
+            if [ \$failed -eq 1 ]; then
+              echo '❌ Some services are unhealthy!'
+              exit 1
+            fi
+            echo '✅ All services are healthy!'
+          "
+    id: "validate-health"
+    waitFor: ["deploy-to-vm"]
 
 # -- Push images to Artifact Registry -------------------------
 images:
@@ -120,4 +302,4 @@ images:
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/admin-bot:${_IMAGE_TAG}"
   - "${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/admin-bot:latest"
 
-timeout: "1200s"  # 20 min max
+timeout: "1800s"  # 30 min (accounts for lint + build + deploy)

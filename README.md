@@ -133,8 +133,21 @@ python scripts/run_reporting.py
 Training bisa dilakukan via:
 - **Notebook** (untuk full Optuna tuning) - folder `Analyst/`
 - **Script** (untuk quick retrain) - `scripts/retrain.py`
+- **Telegram** (hot reload) - `/retrain` command via admin bot
 
 Lihat section "Retraining Model" di bawah.
+
+## CI/CD Pipeline
+
+**Cloud Build** is used for all CI/CD automation:
+
+- **Lint** — Python code quality checks with ruff
+- **Validate** — Dockerfile & docker-compose syntax validation
+- **Build** — Parallel Docker image builds for all 5 microservices
+- **Deploy** — Automatic deployment to GCP VM (main branch only)
+- **Health Check** — Verify all services are running after deploy
+
+**For detailed setup instructions, see [CICD_SETUP.md](CICD_SETUP.md)**
 
 ## ML Admin Commands
 
