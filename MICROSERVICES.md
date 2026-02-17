@@ -2,7 +2,7 @@
 
 ## Architecture Overview
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────┐
 │                    Nginx Gateway (:80)                         │
 │   /api/predict → Prediction API                               │
@@ -34,7 +34,7 @@
 ## Services
 
 | Service | Port | Description |
-|---------|------|-------------|
+| ------- | ---- | ----------- |
 | **prediction-api** | 8001 | ML Prediction — LightGBM + Gemini cascade (Knowledge Distillation) |
 | **data-api** | 8002 | Centralized data — Google Sheets CRUD, S3 upload, ML Tracking |
 | **collector-bot** | — | Telegram bot: collects ops replies, calls Prediction + Data API |
@@ -46,7 +46,7 @@
 
 ## Gemini Knowledge Distillation (Cascade Pattern)
 
-```
+```text
 Input Text
     │
     ▼
@@ -111,7 +111,7 @@ docker compose -f docker-compose.microservices.yml up prediction-api data-api
 The original monolith (`scripts/run_all.py`) is preserved. To switch:
 
 | Monolith | Microservice |
-|----------|-------------|
+| -------- | ----------- |
 | `python scripts/run_all.py` | `docker compose -f docker-compose.microservices.yml up` |
 | Direct Sheets access | Data API (`http://data-api:8002`) |
 | Direct MLClassifier | Prediction API (`http://prediction-api:8001`) |
@@ -120,7 +120,7 @@ The original monolith (`scripts/run_all.py`) is preserved. To switch:
 
 ## File Structure
 
-```
+```text
 services/
 ├── shared/                 # Shared library (all services import this)
 │   ├── __init__.py

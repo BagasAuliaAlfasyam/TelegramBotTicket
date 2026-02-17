@@ -2,7 +2,7 @@
 
 ## Architecture
 
-```
+```text
 GitHub (push to main)
     │
     ▼
@@ -24,18 +24,18 @@ GitHub Actions
 
 ## Pipeline Flow
 
-| Event | Action |
-|-------|--------|
-| Push to `main` | CI → Cloud Build → Deploy to VM |
-| Push to `develop` / PR | CI only (lint + build test) |
-| Manual trigger | Deploy with optional skip-build |
+| Event                  | Action                          |
+| ---------------------- | ------------------------------- |
+| Push to `main`         | CI → Cloud Build → Deploy to VM |
+| Push to `develop` / PR | CI only (lint + build test)     |
+| Manual trigger         | Deploy with optional skip-build |
 
 ## Required GitHub Secrets
 
 Go to **Settings → Secrets and variables → Actions** in your repo:
 
 | Secret | Description | Example |
-|--------|-------------|---------|
+| ------ | ----------- | ------- |
 | `GCP_SA_KEY` | Service account JSON key (full JSON, not base64) | `{"type":"service_account",...}` |
 | `GCP_PROJECT_ID` | GCP project ID | `mytech-480618` |
 | `GCP_VM_NAME` | VM instance name | `mytechops` |
@@ -143,7 +143,7 @@ cd ~/TelegramBotMyTech
 
 ## File Structure
 
-```
+```text
 .github/
   workflows/
     ci.yml              # Lint + docker build test
@@ -158,7 +158,7 @@ pyproject.toml          # Ruff linter config
 
 ## Secrets Management
 
-- **`.env.local`** — lives on the VM only, never committed
-- **`white-set-*.json`** — Google service account, lives on VM, in `.gitignore`
-- **GitHub Secrets** — GCP auth for CI/CD pipeline
-- **No secrets in Docker images** — all injected via env vars at runtime
+-   **`.env.local`** — lives on the VM only, never committed
+-   **`white-set-*.json`** — Google service account, lives on VM, in `.gitignore`
+-   **GitHub Secrets** — GCP auth for CI/CD pipeline
+-   **No secrets in Docker images** — all injected via env vars at runtime
