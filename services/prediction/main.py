@@ -72,6 +72,7 @@ app = FastAPI(
     title="Ticket Classifier - Prediction API",
     description="LightGBM + Gemini cascade prediction service",
     version="2.0.0",
+    root_path="/prediction",
     lifespan=lifespan,
 )
 

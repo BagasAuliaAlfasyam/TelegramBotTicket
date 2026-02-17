@@ -77,6 +77,7 @@ app = FastAPI(
     title="Ticket Classifier - Data API",
     description="Centralized data access for Google Sheets, S3, and ML Tracking",
     version="2.0.0",
+    root_path="/data",
     lifespan=lifespan,
 )
 

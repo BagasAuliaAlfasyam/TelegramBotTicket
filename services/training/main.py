@@ -43,6 +43,7 @@ async def lifespan(application: FastAPI):
 app = FastAPI(
     title="Ticket Classifier - Training Service",
     version="2.0.0",
+    root_path="/training",
     lifespan=lifespan,
 )
 
