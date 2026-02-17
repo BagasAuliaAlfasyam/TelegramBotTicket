@@ -25,7 +25,7 @@ _genai = None
 def _import_genai():
     global _genai
     if _genai is None:
-        import google.generativeai as genai
+        import google.generativeai as genai  # type: ignore[import-unresolved]
         _genai = genai
     return _genai
 
