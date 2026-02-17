@@ -21,22 +21,21 @@ from pathlib import Path
 # Add project root to path for shared imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-
+from services.prediction.src.hybrid import HybridClassifier
 from services.shared.config import PredictionServiceConfig, setup_logging
 from services.shared.models import (
-    PredictionRequest,
-    PredictionResult,
     BatchPredictionRequest,
     BatchPredictionResult,
+    HealthResponse,
     ModelInfoResponse,
     ModelReloadRequest,
     ModelReloadResponse,
-    HealthResponse,
+    PredictionRequest,
+    PredictionResult,
 )
-from services.prediction.src.hybrid import HybridClassifier
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,9 +56,9 @@ async def lifespan(application: FastAPI):
     _LOGGER.info("Starting Prediction API...")
     _LOGGER.info("MLflow URI: %s", config.mlflow_tracking_uri)
     _LOGGER.info("Gemini enabled: %s", config.gemini_enabled)
-    
+
     classifier = HybridClassifier(config)
-    
+
     if not classifier.load_model():
         _LOGGER.error("Failed to load model from MLflow!")
         # Don't crash — service starts but returns MANUAL for all requests
@@ -90,7 +89,7 @@ app.add_middleware(
 async def predict(request: PredictionRequest):
     """
     Predict Symtomps category for a ticket.
-    
+
     Uses LightGBM as primary classifier.
     If confidence < cascade_threshold, falls back to Gemini.
     """
@@ -102,7 +101,7 @@ async def predict(request: PredictionRequest):
             inference_time_ms=0.0,
             source="lightgbm",
         )
-    
+
     result = classifier.predict(request.tech_raw_text, request.solving)
     return result
 
@@ -112,13 +111,13 @@ async def predict_batch(request: BatchPredictionRequest):
     """Batch prediction for multiple tickets."""
     if not classifier or not classifier.is_loaded:
         raise HTTPException(503, "Model not loaded")
-    
+
     start = time.time()
     results = []
     for item in request.items:
         result = classifier.predict(item.tech_raw_text, item.solving)
         results.append(result)
-    
+
     return BatchPredictionResult(
         results=results,
         total_time_ms=round((time.time() - start) * 1000, 2),
@@ -130,7 +129,7 @@ async def model_info():
     """Get model metadata, version, classes, and thresholds."""
     if not classifier:
         raise HTTPException(503, "Classifier not initialized")
-    
+
     info = classifier.get_info()
     return ModelInfoResponse(
         version=info.get("version", "unknown"),
@@ -151,9 +150,9 @@ async def model_reload(request: ModelReloadRequest = ModelReloadRequest()):
     """Hot reload model from MLflow without restart."""
     if not classifier:
         raise HTTPException(503, "Classifier not initialized")
-    
+
     success, old_ver, new_ver = classifier.reload_model(request.stage)
-    
+
     return ModelReloadResponse(
         success=success,
         old_version=old_ver,

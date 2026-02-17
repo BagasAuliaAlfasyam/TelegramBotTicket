@@ -2,15 +2,17 @@
 Message Parsers (microservice copy — zero deps, preserved as-is)
 """
 from __future__ import annotations
+
 import re
-from typing import Collection, Optional
+from collections.abc import Collection
+from typing import Optional
 
 _OPS_PATTERN = re.compile(
     r"^(?P<solving>.+?),\s*(?P<app>[A-Za-z]+)\s+(?P<initials>-[A-Za-z]+)$"
 )
 
 
-def parse_ops_message(text: str, allowed_apps: Collection[str]) -> Optional[dict[str, str]]:
+def parse_ops_message(text: str, allowed_apps: Collection[str]) -> dict[str, str] | None:
     if not text:
         return None
     normalized_apps = {app.upper() for app in allowed_apps}

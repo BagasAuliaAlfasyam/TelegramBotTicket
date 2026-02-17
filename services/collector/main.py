@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from services.collector.src.bot import OpsCollector
+from services.shared.config import CollectorBotConfig, setup_logging
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -16,9 +18,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
-from services.shared.config import CollectorBotConfig, setup_logging
-from services.collector.src.bot import OpsCollector
 
 
 def build_application(config: CollectorBotConfig) -> Application:

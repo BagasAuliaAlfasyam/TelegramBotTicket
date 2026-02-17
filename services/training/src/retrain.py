@@ -19,13 +19,13 @@ from datetime import datetime
 from typing import Optional
 
 import httpx
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from scipy.sparse import hstack
 import lightgbm as lgb
-
-from services.shared.preprocessing import ITSupportTextPreprocessor
+import numpy as np
+from scipy.sparse import hstack
 from services.shared.config import TrainingServiceConfig
+from services.shared.preprocessing import ITSupportTextPreprocessor
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ OPTIMAL_PARAMS = {
     "force_col_wise": True,  # faster for sparse data
 }
 
-# Label normalization map  
+# Label normalization map
 LABEL_MAPPING = {
     "account management": "Account Management",
     "application error": "Application Error",
@@ -71,7 +71,7 @@ class RetrainPipeline:
         self._preprocessor = ITSupportTextPreprocessor()
         self._http = httpx.Client(timeout=120.0)
         self._status = "idle"
-        self._last_trained: Optional[str] = None
+        self._last_trained: str | None = None
         self._last_result: dict = {}
 
     @property
@@ -79,7 +79,7 @@ class RetrainPipeline:
         return self._status
 
     @property
-    def last_trained(self) -> Optional[str]:
+    def last_trained(self) -> str | None:
         return self._last_trained
 
     @property
@@ -216,9 +216,13 @@ class RetrainPipeline:
         # 7. Log to MLflow
         mlflow_version = None
         try:
+            import json as _json
+            import os
+            import tempfile
+
+            import joblib
             import mlflow
             import mlflow.lightgbm
-            import joblib, tempfile, os, json as _json
 
             mlflow.set_tracking_uri(self._config.mlflow_tracking_uri)
             mlflow.set_experiment(self._config.mlflow_experiment_name)

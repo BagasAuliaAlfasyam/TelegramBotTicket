@@ -14,10 +14,11 @@ import json
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import httpx
 from telegram import Bot, Message, Update
@@ -29,13 +30,12 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from services.shared.config import CollectorBotConfig, setup_logging
 from services.collector.src.parsers import parse_ops_message
 from services.collector.src.sla import compute_sla
+from services.shared.config import CollectorBotConfig, setup_logging
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,11 +136,11 @@ class OpsCollector:
         try:
             self._tz = ZoneInfo(config.timezone)
         except Exception:
-            self._tz = timezone.utc
+            self._tz = UTC
 
     async def health(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if update.message:
-            await update.message.reply_text(f"OK {datetime.now(timezone.utc).isoformat()}")
+            await update.message.reply_text(f"OK {datetime.now(UTC).isoformat()}")
 
     async def handle_ops_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
@@ -153,7 +153,7 @@ class OpsCollector:
         ):
             return
 
-        now_dt = _to_utc(message.date) or datetime.now(timezone.utc)
+        now_dt = _to_utc(message.date) or datetime.now(UTC)
         is_ack = "oncek" in message.text.lower()
         parsed = parse_ops_message(message.text, _ALLOWED_APPS) if not is_ack else None
         if not parsed and not is_ack:
@@ -349,7 +349,7 @@ class OpsCollector:
         """Download from Telegram, upload via Data API."""
         mime = info.mime_type or _DEFAULT_MIME_BY_TYPE.get(info.media_type, "application/octet-stream")
         ext = _guess_extension(info, mime)
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         key = f"{ts:%Y/%m/%d}/{chat_id}/{message_id}_{ts:%Y%m%dT%H%M%SZ}.{ext}"
 
         tg_file = await bot.get_file(info.file_id)
@@ -405,8 +405,8 @@ def _to_utc(v):
     if not v:
         return None
     if v.tzinfo is None:
-        return v.replace(tzinfo=timezone.utc)
-    return v.astimezone(timezone.utc)
+        return v.replace(tzinfo=UTC)
+    return v.astimezone(UTC)
 
 
 def _to_local(v, tz):

@@ -9,11 +9,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from services.admin.src.bot import AdminCommandHandler
+from services.shared.config import AdminBotConfig, setup_logging
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CommandHandler
-
-from services.shared.config import AdminBotConfig, setup_logging
-from services.admin.src.bot import AdminCommandHandler
 
 
 def build_application(config: AdminBotConfig) -> Application:

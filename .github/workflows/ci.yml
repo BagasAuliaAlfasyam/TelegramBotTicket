@@ -36,7 +36,11 @@ jobs:
 
       - name: Validate docker-compose syntax
         run: |
-          pip install docker-compose
+          # Provide dummy env vars so compose config doesn't fail on missing vars
+          export GOOGLE_SPREADSHEET_NAME=dummy AWS_ACCESS_KEY_ID=dummy AWS_SECRET_ACCESS_KEY=dummy
+          export MLFLOW_TRACKING_USERNAME=dummy MLFLOW_TRACKING_PASSWORD=dummy
+          export GEMINI_API_KEY=dummy TELEGRAM_BOT_TOKEN_COLLECTING=dummy
+          export TELEGRAM_BOT_TOKEN_REPORTING=dummy ADMIN_USER_IDS=dummy
           docker compose -f docker-compose.microservices.yml config --quiet
           echo "Compose file valid ✓"
 

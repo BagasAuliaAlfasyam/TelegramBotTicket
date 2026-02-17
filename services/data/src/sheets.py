@@ -6,11 +6,11 @@ Centralized Sheets access — all services go through Data API.
 from __future__ import annotations
 
 import logging
-from typing import Sequence, Optional
+from collections.abc import Sequence
+from typing import Optional
 
 import gspread
 from gspread.exceptions import APIError, GSpreadException
-
 from services.shared.config import DataServiceConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ class GoogleSheetsClient:
                       self._config.google_worksheet_name)
         return worksheet
 
-    def append_log_row(self, row: Sequence, *, return_row_index: bool = False) -> Optional[int]:
+    def append_log_row(self, row: Sequence, *, return_row_index: bool = False) -> int | None:
         row_index = None
         if return_row_index:
             row_index = len(self._worksheet.get_all_values()) + 1
@@ -63,7 +63,7 @@ class GoogleSheetsClient:
             _LOGGER.exception("Failed to fetch row %s", row_index)
             return []
 
-    def find_row_index_by_tech_message_id(self, tech_message_id: str) -> Optional[int]:
+    def find_row_index_by_tech_message_id(self, tech_message_id: str) -> int | None:
         try:
             cell = self._worksheet.find(str(tech_message_id))
         except (GSpreadException, APIError):

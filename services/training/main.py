@@ -16,10 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
-
 from services.shared.config import TrainingServiceConfig, setup_logging
 from services.shared.models import HealthResponse
 from services.training.src.retrain import RetrainPipeline

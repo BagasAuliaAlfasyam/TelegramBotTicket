@@ -6,13 +6,12 @@ Manages ML_Tracking and Monitoring sheets.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
 
 import gspread
 from gspread.exceptions import APIError, GSpreadException
-
 from services.shared.config import DataServiceConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -24,7 +23,7 @@ MONITORING_SHEET = "Monitoring"
 class MLTrackingClient:
     """Manages ML_Tracking and Monitoring sheets."""
 
-    def __init__(self, config: DataServiceConfig, spreadsheet: Optional[gspread.Spreadsheet] = None):
+    def __init__(self, config: DataServiceConfig, spreadsheet: gspread.Spreadsheet | None = None):
         self._config = config
         self._spreadsheet = spreadsheet
         self._tracking_sheet = None
@@ -121,10 +120,14 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.90: auto_count += 1
-                    elif conf >= 0.70: high_count += 1
-                    elif conf >= 0.50: medium_count += 1
-                    else: manual_count += 1
+                    if conf >= 0.90:
+                        auto_count += 1
+                    elif conf >= 0.70:
+                        high_count += 1
+                    elif conf >= 0.50:
+                        medium_count += 1
+                    else:
+                        manual_count += 1
                 except ValueError:
                     manual_count += 1
 
@@ -136,8 +139,10 @@ class MLTrackingClient:
 
                 # Track prediction source (column 7 if exists)
                 if len(row) > 7 and row[7]:
-                    if row[7] == "gemini": gemini_count += 1
-                    elif row[7] == "hybrid": hybrid_count += 1
+                    if row[7] == "gemini":
+                        gemini_count += 1
+                    elif row[7] == "hybrid":
+                        hybrid_count += 1
 
             return {
                 "total_predictions": total,
@@ -176,7 +181,8 @@ class MLTrackingClient:
                 if len(row) >= 10 and row[1]:
                     day_total = int(row[1]) if row[1] else 0
                     total += day_total
-                    if row[2] and day_total > 0: conf_sum += float(row[2]) * day_total
+                    if row[2] and day_total > 0:
+                        conf_sum += float(row[2]) * day_total
                     auto_c += int(row[3]) if row[3] else 0
                     high_c += int(row[4]) if row[4] else 0
                     medium_c += int(row[5]) if row[5] else 0
@@ -224,13 +230,17 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.90: auto_c += 1
-                    elif conf >= 0.70: high_c += 1
-                    elif conf >= 0.50: medium_c += 1
+                    if conf >= 0.90:
+                        auto_c += 1
+                    elif conf >= 0.70:
+                        high_c += 1
+                    elif conf >= 0.50:
+                        medium_c += 1
                 except ValueError:
                     pass
 
-                if row[5] == "pending": pending_c += 1
+                if row[5] == "pending":
+                    pending_c += 1
                 elif row[5] in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
                     reviewed_c += 1
 

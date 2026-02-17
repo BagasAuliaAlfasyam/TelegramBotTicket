@@ -11,7 +11,6 @@ from typing import Optional
 import boto3
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import BotoCoreError, ClientError
-
 from services.shared.config import DataServiceConfig
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,14 +20,14 @@ class S3Uploader:
     def __init__(self, config: DataServiceConfig):
         self._bucket = config.s3_bucket_name
         _endpoint = config.s3_endpoint_url or None
-        
+
         if config.s3_public_url:
             self._public_base_url = config.s3_public_url.rstrip("/")
         elif _endpoint:
             self._public_base_url = f"{_endpoint.rstrip('/')}/{self._bucket}"
         else:
             self._public_base_url = f"https://{self._bucket}.s3.amazonaws.com"
-        
+
         self._media_prefix = config.s3_media_prefix
 
         boto_config = BotoConfig(

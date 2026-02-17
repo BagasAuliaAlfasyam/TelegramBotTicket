@@ -33,11 +33,11 @@ def _import_genai():
 class GeminiClassifier:
     """
     Zero-shot classifier menggunakan Google Gemini API.
-    
+
     Tidak perlu training — cukup kirim prompt + daftar label,
     Gemini akan classify berdasarkan semantic understanding.
     """
-    
+
     SYSTEM_PROMPT = """Kamu adalah sistem klasifikasi tiket IT support untuk Telkom Indonesia.
 Tugasmu adalah mengklasifikasikan teks tiket ke dalam SATU kategori yang paling sesuai.
 
@@ -65,19 +65,19 @@ KONTEKS DOMAIN:
         self._model = None
         self._is_ready = False
         self._labels: list[str] = []
-        
+
         self._init_model()
-    
+
     def _init_model(self) -> None:
         """Initialize Gemini model."""
         if not self._api_key:
             _LOGGER.warning("Gemini API key not configured, classifier disabled")
             return
-        
+
         try:
             genai = _import_genai()
             genai.configure(api_key=self._api_key)
-            
+
             self._model = genai.GenerativeModel(
                 model_name=self._model_name,
                 generation_config=genai.GenerationConfig(
@@ -90,37 +90,37 @@ KONTEKS DOMAIN:
             )
             self._is_ready = True
             _LOGGER.info("Gemini classifier initialized: model=%s", self._model_name)
-            
+
         except Exception as e:
             _LOGGER.error("Failed to initialize Gemini: %s", e)
             self._is_ready = False
-    
+
     def set_labels(self, labels: list[str]) -> None:
         """
         Set daftar label yang valid dari LightGBM model.
-        
+
         Dipanggil setelah LightGBM model loaded agar Gemini
         tahu label mana yang boleh digunakan.
         """
         self._labels = labels
         _LOGGER.info("Gemini labels updated: %d categories", len(labels))
-    
+
     @property
     def is_ready(self) -> bool:
         return self._is_ready and bool(self._labels)
-    
+
     def predict(
         self,
         tech_raw_text: str,
         solving: str = "",
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Classify ticket text using Gemini.
-        
+
         Args:
             tech_raw_text: Raw text from technician
             solving: Solving text from ops
-            
+
         Returns:
             dict with keys: label, confidence, inference_time_ms
             None if prediction fails
@@ -128,13 +128,13 @@ KONTEKS DOMAIN:
         if not self.is_ready:
             _LOGGER.warning("Gemini not ready (no API key or no labels)")
             return None
-        
+
         start_time = time.time()
-        
+
         try:
             # Build prompt with label list
             labels_str = "\n".join(f"- {label}" for label in self._labels)
-            
+
             user_prompt = f"""Klasifikasikan tiket IT support berikut:
 
 TEKS TEKNISI: {tech_raw_text}
@@ -145,57 +145,57 @@ KATEGORI YANG TERSEDIA:
 
 Jawab dalam format JSON:
 {{"label": "NAMA_KATEGORI", "confidence": 0.85, "reasoning": "alasan singkat"}}"""
-            
+
             response = self._model.generate_content(user_prompt)
-            
+
             # Parse JSON response
             response_text = response.text.strip()
-            
+
             # Handle potential markdown code blocks
             if response_text.startswith("```"):
                 response_text = response_text.split("```")[1]
                 if response_text.startswith("json"):
                     response_text = response_text[4:]
                 response_text = response_text.strip()
-            
+
             result = json.loads(response_text)
-            
+
             label = result.get("label", "")
             confidence = float(result.get("confidence", 0.0))
-            
+
             # Validate label exists in our list
             if label not in self._labels:
                 # Try case-insensitive match
-                label_lower_map = {l.lower(): l for l in self._labels}
+                label_lower_map = {lbl.lower(): lbl for lbl in self._labels}
                 matched = label_lower_map.get(label.lower())
                 if matched:
                     label = matched
                 else:
                     _LOGGER.warning("Gemini returned unknown label: %s", label)
                     confidence *= 0.5  # Penalize unknown labels
-            
+
             inference_time = (time.time() - start_time) * 1000
-            
+
             _LOGGER.info(
                 "Gemini prediction: %s (%.1f%%) [%.0fms] - %s",
                 label, confidence * 100, inference_time,
                 result.get("reasoning", "")[:80]
             )
-            
+
             return {
                 "label": label,
                 "confidence": round(confidence, 4),
                 "inference_time_ms": round(inference_time, 2),
                 "reasoning": result.get("reasoning", ""),
             }
-            
+
         except json.JSONDecodeError as e:
             _LOGGER.error("Failed to parse Gemini response as JSON: %s", e)
             return None
         except Exception as e:
             _LOGGER.error("Gemini prediction failed: %s", e)
             return None
-    
+
     def get_info(self) -> dict:
         """Get Gemini classifier status info."""
         return {

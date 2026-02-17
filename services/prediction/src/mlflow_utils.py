@@ -5,14 +5,15 @@ Same logic as original src/ml/mlflow_utils.py, but standalone.
 """
 from __future__ import annotations
 
-import os
 import json
 import logging
+import os
 import tempfile
-from pathlib import Path
-from typing import Any, Optional, Dict, List, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 import joblib
 
@@ -45,36 +46,36 @@ class MLflowConfig:
 
 class MLflowManager:
     """MLflow integration for model loading and registry."""
-    
+
     def __init__(self, config: MLflowConfig):
         self.config = config
         self._initialized = False
         self._current_run = None
         self._experiment_id = None
-    
+
     @property
     def is_enabled(self) -> bool:
         return bool(self.config.tracking_uri)
-    
+
     def init(self) -> bool:
         if not self.is_enabled:
             return False
         if self._initialized:
             return True
-        
+
         try:
             mlflow, _ = _import_mlflow()
-            
+
             if self.config.s3_endpoint_url:
                 os.environ["MLFLOW_S3_ENDPOINT_URL"] = self.config.s3_endpoint_url
                 os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
-            
+
             if self.config.tracking_username and self.config.tracking_password:
                 os.environ["MLFLOW_TRACKING_USERNAME"] = self.config.tracking_username
                 os.environ["MLFLOW_TRACKING_PASSWORD"] = self.config.tracking_password
-            
+
             mlflow.set_tracking_uri(self.config.tracking_uri)
-            
+
             experiment = mlflow.get_experiment_by_name(self.config.experiment_name)
             if experiment is None:
                 self._experiment_id = mlflow.create_experiment(
@@ -83,21 +84,21 @@ class MLflowManager:
                 )
             else:
                 self._experiment_id = experiment.experiment_id
-            
+
             mlflow.set_experiment(self.config.experiment_name)
             self._initialized = True
             return True
-            
+
         except Exception as e:
             _LOGGER.error("Failed to initialize MLflow: %s", e)
             return False
-    
+
     @contextmanager
-    def start_run(self, run_name: Optional[str] = None, tags: Optional[Dict[str, str]] = None):
+    def start_run(self, run_name: str | None = None, tags: dict[str, str] | None = None):
         if not self._initialized:
             yield None
             return
-        
+
         mlflow, _ = _import_mlflow()
         try:
             run = mlflow.start_run(run_name=run_name, tags=tags)
@@ -106,87 +107,87 @@ class MLflowManager:
         finally:
             mlflow.end_run()
             self._current_run = None
-    
-    def log_params(self, params: Dict[str, Any]) -> None:
+
+    def log_params(self, params: dict[str, Any]) -> None:
         if not self._current_run:
             return
         mlflow, _ = _import_mlflow()
         mlflow.log_params(params)
-    
-    def log_metrics(self, metrics: Dict[str, float], step: Optional[int] = None) -> None:
+
+    def log_metrics(self, metrics: dict[str, float], step: int | None = None) -> None:
         if not self._current_run:
             return
         mlflow, _ = _import_mlflow()
         mlflow.log_metrics(metrics, step=step)
-    
+
     def log_model(self, model, vectorizers, label_encoder, preprocessor, metadata, artifact_path="model"):
         if not self._current_run:
             return None
-        
+
         mlflow, mlflow_lgb = _import_mlflow()
-        
+
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmppath = Path(tmpdir)
                 joblib.dump(vectorizers, tmppath / "tfidf_vectorizer.pkl")
                 joblib.dump(label_encoder, tmppath / "label_encoder.pkl")
                 joblib.dump(preprocessor, tmppath / "preprocessor.pkl")
-                
+
                 with open(tmppath / "metadata.json", "w", encoding="utf-8") as f:
                     json.dump(metadata, f, indent=2, ensure_ascii=False, default=str)
-                
+
                 model_info = mlflow_lgb.log_model(model, artifact_path=artifact_path)
                 mlflow.log_artifact(str(tmppath / "tfidf_vectorizer.pkl"), artifact_path)
                 mlflow.log_artifact(str(tmppath / "label_encoder.pkl"), artifact_path)
                 mlflow.log_artifact(str(tmppath / "preprocessor.pkl"), artifact_path)
                 mlflow.log_artifact(str(tmppath / "metadata.json"), artifact_path)
-                
+
                 return model_info.model_uri
         except Exception as e:
             _LOGGER.error("Failed to log model: %s", e)
             return None
-    
+
     def register_model(self, model_uri=None, stage="Staging", description=""):
         if not self.is_enabled:
             return None
-        
+
         mlflow, _ = _import_mlflow()
-        
+
         try:
             if model_uri is None and self._current_run:
                 model_uri = f"runs:/{self._current_run.info.run_id}/model"
             if not model_uri:
                 return None
-            
+
             result = mlflow.register_model(model_uri=model_uri, name=self.config.model_name)
             version = result.version
-            
+
             client = mlflow.tracking.MlflowClient()
             client.transition_model_version_stage(
                 name=self.config.model_name, version=version, stage=stage,
                 archive_existing_versions=(stage == "Production")
             )
-            
+
             if description:
                 client.update_model_version(name=self.config.model_name, version=version, description=description)
-            
+
             return version
         except Exception as e:
             _LOGGER.error("Failed to register model: %s", e)
             return None
-    
+
     def load_production_model(self):
         return self.load_model_by_stage("Production")
-    
+
     def load_model_by_stage(self, stage: str = "Production"):
         if not self.is_enabled:
             return None
-        
+
         mlflow, mlflow_lgb = _import_mlflow()
-        
+
         try:
             client = mlflow.tracking.MlflowClient()
-            
+
             # Try to find model by stage first
             version = None
             try:
@@ -195,7 +196,7 @@ class MLflowManager:
                     version = versions[0]
             except Exception:
                 pass
-            
+
             # Fallback: get latest version regardless of stage
             if version is None:
                 _LOGGER.info("No model in stage '%s', trying latest version...", stage)
@@ -211,18 +212,18 @@ class MLflowManager:
                             version = sorted(search, key=lambda v: int(v.version), reverse=True)[0]
                     except Exception:
                         pass
-            
+
             if version is None:
                 _LOGGER.error("No model versions found for '%s'", self.config.model_name)
                 return None
-            
+
             run_id = version.run_id
             _LOGGER.info("Loading model version=%s, stage=%s, run_id=%s", version.version, version.current_stage, run_id)
-            
+
             # Download artifacts
             artifact_path = client.download_artifacts(run_id, "model")
             artifact_dir = Path(artifact_path)
-            
+
             # Load LightGBM model — try MLflow format first, fallback to joblib
             model = None
             try:
@@ -235,11 +236,11 @@ class MLflowManager:
                     model_file = artifact_dir / "model.joblib"
                     if model_file.exists():
                         model = joblib.load(model_file)
-            
+
             if model is None:
                 _LOGGER.error("Failed to load LightGBM model from any source")
                 return None
-            
+
             # Load vectorizers
             vectorizers = None
             vec_path = artifact_dir / "tfidf_vectorizer.pkl"
@@ -251,7 +252,7 @@ class MLflowManager:
                 char_path = artifact_dir / "tfidf_char.joblib"
                 if word_path.exists() and char_path.exists():
                     vectorizers = {"word_tfidf": joblib.load(word_path), "char_tfidf": joblib.load(char_path)}
-            
+
             # Load label encoder
             encoder = None
             for name in ["label_encoder.pkl", "label_encoder.joblib"]:
@@ -259,7 +260,7 @@ class MLflowManager:
                 if enc_path.exists():
                     encoder = joblib.load(enc_path)
                     break
-            
+
             # Load preprocessor (optional)
             preprocessor = None
             for name in ["preprocessor.pkl", "preprocessor.joblib"]:
@@ -267,18 +268,18 @@ class MLflowManager:
                 if prep_path.exists():
                     preprocessor = joblib.load(prep_path)
                     break
-            
+
             # Load metadata (optional)
             metadata = {}
             meta_path = artifact_dir / "metadata.json"
             if meta_path.exists():
-                with open(meta_path, "r", encoding="utf-8") as f:
+                with open(meta_path, encoding="utf-8") as f:
                     metadata = json.load(f)
-            
+
             if vectorizers is None or encoder is None:
                 _LOGGER.error("Missing required artifacts (vectorizers=%s, encoder=%s)", vectorizers is not None, encoder is not None)
                 return None
-            
+
             return {
                 "model": model, "vectorizers": vectorizers, "encoder": encoder,
                 "preprocessor": preprocessor, "metadata": metadata,
@@ -287,15 +288,15 @@ class MLflowManager:
         except Exception as e:
             _LOGGER.error("Failed to load model from stage %s: %s", stage, e)
             return None
-    
-    def get_status(self) -> Dict[str, Any]:
+
+    def get_status(self) -> dict[str, Any]:
         status = {
             "enabled": self.is_enabled,
             "initialized": self._initialized,
             "tracking_uri": self.config.tracking_uri if self.is_enabled else None,
             "model_name": self.config.model_name,
         }
-        
+
         if self._initialized:
             try:
                 mlflow, _ = _import_mlflow()
@@ -309,5 +310,5 @@ class MLflowManager:
                     }
             except Exception:
                 pass
-        
+
         return status

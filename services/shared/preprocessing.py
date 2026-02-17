@@ -23,12 +23,12 @@ except ImportError:
 class ITSupportTextPreprocessor:
     """
     Preprocessor teks khusus untuk tiket IT support Indonesia.
-    
+
     Single source of truth — used by:
     - Prediction API (inference)
     - Training Pipeline (training)
     """
-    
+
     ABBREVIATIONS = {
         'moban': 'mohon bantuan',
         'tks': 'terima kasih',
@@ -58,7 +58,7 @@ class ITSupportTextPreprocessor:
         'ak': 'aku',
         'min': 'admin',
     }
-    
+
     IT_TERMS = {
         'otp', 'totp', 'mfa', '2fa', 'auth', 'authenticator',
         'login', 'logout', 'password', 'pwd', 'pass', 'reset', 'locked', 'unlock',
@@ -72,14 +72,14 @@ class ITSupportTextPreprocessor:
         'sync', 'sinkron', 'refresh', 'clear', 'cache',
         'bai', 'reopen', 'close', 'done', 'selesai',
     }
-    
+
     def __init__(self, use_separator: bool = True):
         self.use_separator = use_separator
-    
+
     def preprocess(self, tech_raw_text: str, solving: str = "") -> str:
         tech_text = self._clean_text(tech_raw_text)
         solving_text = self._clean_text(solving)
-        
+
         if self.use_separator:
             if tech_text and solving_text:
                 return f"{tech_text} [SEP] {solving_text}"
@@ -91,13 +91,13 @@ class ITSupportTextPreprocessor:
                 return ""
         else:
             return f"{tech_text} {solving_text}".strip()
-    
+
     def _clean_text(self, text: str) -> str:
         if not text or str(text).lower() == 'nan':
             return ""
         if pd is not None and pd.isna(text):
             return ""
-        
+
         text = str(text).lower()
         text = re.sub(r'http\S+|www\S+|https\S+', ' ', text)
         text = re.sub(r'@\w+', ' ', text)
@@ -107,16 +107,16 @@ class ITSupportTextPreprocessor:
         text = re.sub(r'\S+@\S+\.\S+', ' ', text)
         text = re.sub(r'(wo|sc)[-\s]?(\d+)', r'\1_code', text)
         text = re.sub(r'(nik|laborcode)\s*[:\-]?\s*\d+', r'\1', text)
-        
+
         for abbr, full in self.ABBREVIATIONS.items():
             text = re.sub(rf'\b{abbr}\b', full, text)
-        
+
         text = re.sub(r'\b\d+\b', ' ', text)
         text = re.sub(r'[^\w\s\[\]]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
-        
+
         return text
-    
+
     def batch_preprocess(self, df,
                          text_col: str = 'tech raw text',
                          solving_col: str = 'solving'):

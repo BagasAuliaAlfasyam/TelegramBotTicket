@@ -7,28 +7,27 @@ Single source of truth for request/response schemas.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-
 # ============ Enums ============
 
-class PredictionStatus(str, Enum):
+class PredictionStatus(StrEnum):
     AUTO = "AUTO"
     HIGH_REVIEW = "HIGH_REVIEW"
     MEDIUM_REVIEW = "MEDIUM_REVIEW"
     MANUAL = "MANUAL"
 
 
-class PredictionSource(str, Enum):
+class PredictionSource(StrEnum):
     LIGHTGBM = "lightgbm"
     GEMINI = "gemini"
     HYBRID = "hybrid"
 
 
-class ReviewStatus(str, Enum):
+class ReviewStatus(StrEnum):
     PENDING = "pending"
     AUTO_APPROVED = "auto_approved"
     APPROVED = "APPROVED"
@@ -51,8 +50,8 @@ class PredictionResult(BaseModel):
     prediction_status: PredictionStatus = Field(..., description="Status berdasarkan threshold")
     inference_time_ms: float = Field(..., description="Waktu prediksi dalam milliseconds")
     source: PredictionSource = Field(PredictionSource.LIGHTGBM, description="Sumber prediksi")
-    gemini_label: Optional[str] = Field(None, description="Label dari Gemini (jika cascade)")
-    gemini_confidence: Optional[float] = Field(None, description="Confidence Gemini (jika cascade)")
+    gemini_label: str | None = Field(None, description="Label dari Gemini (jika cascade)")
+    gemini_confidence: float | None = Field(None, description="Confidence Gemini (jika cascade)")
 
 
 class BatchPredictionRequest(BaseModel):
@@ -75,9 +74,9 @@ class ModelInfoResponse(BaseModel):
     thresholds: dict[str, float] = {}
     loaded_from_mlflow: bool = False
     gemini_enabled: bool = False
-    training_samples: Optional[int] = None
-    training_accuracy: Optional[float] = None
-    trained_at: Optional[str] = None
+    training_samples: int | None = None
+    training_accuracy: float | None = None
+    trained_at: str | None = None
 
 
 class ModelReloadRequest(BaseModel):
@@ -161,7 +160,7 @@ class UploadMediaResponse(BaseModel):
 
 class FindRowResponse(BaseModel):
     """Response for finding a row by tech_message_id."""
-    row_index: Optional[int] = None
+    row_index: int | None = None
     found: bool = False
 
 
@@ -184,10 +183,10 @@ class TrainRequest(BaseModel):
 class TrainStatusResponse(BaseModel):
     """Response for training status."""
     status: str  # idle, training, completed, failed
-    progress: Optional[float] = None
+    progress: float | None = None
     message: str = ""
-    model_version: Optional[str] = None
-    metrics: Optional[dict] = None
+    model_version: str | None = None
+    metrics: dict | None = None
 
 
 # ============ Health Check ============
