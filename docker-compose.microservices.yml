@@ -1,0 +1,260 @@
+# ============================================================
+# Docker Compose — Microservices Architecture
+# ============================================================
+# Services:
+#   prediction-api  (8001) — ML Prediction (LightGBM + Gemini cascade)
+#   data-api        (8002) — Google Sheets + S3 + ML Tracking
+#   collector-bot   (8003) — Telegram Collecting Bot
+#   admin-bot       (8004) — Telegram Admin Bot
+#   training-api    (8005) — Retraining Pipeline
+#   mlflow          (5000) — MLflow Tracking Server (existing)
+#   minio           (9000) — MinIO S3-compatible storage (existing)
+# ============================================================
+
+x-common-env: &common-env
+  PYTHONUNBUFFERED: "1"
+  TIMEZONE: ${TIMEZONE:-Asia/Jakarta}
+  DEBUG: ${DEBUG:-false}
+
+x-google-env: &google-env
+  GOOGLE_SERVICE_ACCOUNT_JSON: /app/service_account.json
+  GOOGLE_SPREADSHEET_NAME: ${GOOGLE_SPREADSHEET_NAME}
+  GOOGLE_WORKSHEET_NAME: ${GOOGLE_WORKSHEET_NAME:-Logs}
+
+x-s3-env: &s3-env
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  AWS_S3_BUCKET: ${AWS_S3_BUCKET}
+  AWS_S3_REGION: ${AWS_S3_REGION:-ap-southeast-1}
+  AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT}
+  AWS_S3_PUBLIC_BASE_URL: ${AWS_S3_PUBLIC_BASE_URL}
+  S3_MEDIA_PREFIX: ${S3_MEDIA_PREFIX:-telegram-media}
+
+x-mlflow-env: &mlflow-env
+  MLFLOW_TRACKING_URI: ${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+  MLFLOW_EXPERIMENT_NAME: ${MLFLOW_EXPERIMENT_NAME:-ticket-classifier}
+  MLFLOW_MODEL_NAME: ${MLFLOW_MODEL_NAME:-ticket-classifier}
+  MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL}
+  MLFLOW_BUCKET_NAME: ${MLFLOW_BUCKET_NAME:-mlflow-artifacts}
+  MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME}
+  MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD}
+
+services:
+  # ============ Prediction API ============
+  prediction-api:
+    build:
+      context: .
+      dockerfile: services/prediction/Dockerfile
+    container_name: prediction-api
+    ports:
+      - "${PREDICTION_API_PORT:-8001}:8001"
+    environment:
+      <<: [*common-env, *mlflow-env, *s3-env]
+      SERVICE_HOST: "0.0.0.0"
+      SERVICE_PORT: "8001"
+      # Gemini Configuration
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_ENABLED: ${GEMINI_ENABLED:-true}
+      GEMINI_MODEL_NAME: ${GEMINI_MODEL_NAME:-gemini-2.0-flash}
+      GEMINI_CASCADE_THRESHOLD: ${GEMINI_CASCADE_THRESHOLD:-0.80}
+      # ML Thresholds
+      ML_THRESHOLD_AUTO: ${ML_THRESHOLD_AUTO:-0.80}
+      ML_THRESHOLD_HIGH: ${ML_THRESHOLD_HIGH:-0.70}
+      ML_THRESHOLD_MEDIUM: ${ML_THRESHOLD_MEDIUM:-0.50}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - microservices
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+
+  # ============ Data API ============
+  data-api:
+    build:
+      context: .
+      dockerfile: services/data/Dockerfile
+    container_name: data-api
+    ports:
+      - "${DATA_API_PORT:-8002}:8002"
+    environment:
+      <<: [*common-env, *google-env, *s3-env]
+      SERVICE_HOST: "0.0.0.0"
+      SERVICE_PORT: "8002"
+    volumes:
+      - ./white-set-293710-9cca41a1afd6.json:/app/service_account.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - microservices
+    restart: unless-stopped
+
+  # ============ Collector Bot ============
+  collector-bot:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    container_name: collector-bot
+    environment:
+      <<: *common-env
+      TELEGRAM_BOT_TOKEN_COLLECTING: ${TELEGRAM_BOT_TOKEN_COLLECTING}
+      TELEGRAM_BOT_TOKEN_REPORTING: ${TELEGRAM_BOT_TOKEN_REPORTING}
+      TELEGRAM_ADMIN_CHAT_ID: ${TARGET_GROUP_REPORTING:-0}
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS}
+      PREDICTION_API_URL: http://prediction-api:8001
+      DATA_API_URL: http://data-api:8002
+    volumes:
+      - collector-state:/app/state
+    networks:
+      - microservices
+    restart: unless-stopped
+    depends_on:
+      data-api:
+        condition: service_healthy
+      prediction-api:
+        condition: service_healthy
+
+  # ============ Admin Bot ============
+  admin-bot:
+    build:
+      context: .
+      dockerfile: services/admin/Dockerfile
+    container_name: admin-bot
+    environment:
+      <<: *common-env
+      TELEGRAM_BOT_TOKEN_REPORTING: ${TELEGRAM_BOT_TOKEN_REPORTING}
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS}
+      PREDICTION_API_URL: http://prediction-api:8001
+      DATA_API_URL: http://data-api:8002
+      TRAINING_API_URL: http://training-api:8005
+    networks:
+      - microservices
+    restart: unless-stopped
+    depends_on:
+      data-api:
+        condition: service_healthy
+      prediction-api:
+        condition: service_healthy
+
+  # ============ Training API ============
+  training-api:
+    build:
+      context: .
+      dockerfile: services/training/Dockerfile
+    container_name: training-api
+    ports:
+      - "${TRAINING_API_PORT:-8005}:8005"
+    environment:
+      <<: [*common-env, *mlflow-env, *s3-env, *google-env]
+      SERVICE_HOST: "0.0.0.0"
+      SERVICE_PORT: "8005"
+      DATA_API_URL: http://data-api:8002
+      GIT_PYTHON_REFRESH: quiet
+      # Gemini for Knowledge Distillation
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_ENABLED: ${GEMINI_ENABLED:-true}
+      GEMINI_MODEL_NAME: ${GEMINI_MODEL_NAME:-gemini-2.0-flash}
+    volumes:
+      - ./white-set-293710-9cca41a1afd6.json:/app/service_account.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - microservices
+    restart: unless-stopped
+    depends_on:
+      data-api:
+        condition: service_healthy
+      mlflow:
+        condition: service_healthy
+
+  # ============ MLflow Server ============
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.10.2
+    container_name: mlflow-server
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    environment:
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL:-http://minio:9000}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    command: ["bash", "-c", "pip install boto3 --quiet && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root s3://${MLFLOW_BUCKET_NAME:-mlflow-artifacts}"]
+    volumes:
+      - mlflow-data:/mlflow
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\""]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    networks:
+      - microservices
+    restart: unless-stopped
+    depends_on:
+      - minio
+
+  # ============ MinIO (S3-Compatible) ============
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - microservices
+    restart: unless-stopped
+
+  # ============ MinIO Init (auto-create buckets) ============
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb myminio/$${MLFLOW_BUCKET} --ignore-existing;
+      mc mb myminio/$${MEDIA_BUCKET} --ignore-existing;
+      echo 'Buckets created successfully';
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
+      MLFLOW_BUCKET: ${MLFLOW_BUCKET_NAME:-mlflow-artifacts}
+      MEDIA_BUCKET: ${AWS_S3_BUCKET:-telegram-media}
+    networks:
+      - microservices
+
+volumes:
+  mlflow-data:
+  minio-data:
+  collector-state:
+
+networks:
+  microservices:
+    driver: bridge

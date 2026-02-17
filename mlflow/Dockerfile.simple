@@ -1,0 +1,28 @@
+# Simplified MLflow Server for Cloud Run
+# With Basic Authentication
+
+FROM python:3.11-slim
+
+# Install dependencies
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages - pin MLflow version
+RUN pip install --no-cache-dir mlflow==2.10.0 boto3>=1.34.0
+
+# Create directories
+RUN mkdir -p /mlflow/db
+
+WORKDIR /mlflow
+
+# Copy startup script
+COPY start.sh /mlflow/start.sh
+RUN chmod +x /mlflow/start.sh
+
+# Cloud Run uses 8080
+EXPOSE 8080
+
+# Environment
+ENV AWS_DEFAULT_REGION=us-east-1
+
+# Start with entrypoint
+CMD ["/mlflow/start.sh"]

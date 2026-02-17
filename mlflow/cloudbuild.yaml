@@ -1,0 +1,59 @@
+# Cloud Build configuration for MLflow Server
+# Deploy to Cloud Run with secrets from Secret Manager
+
+steps:
+  # Build Docker image using simple Dockerfile
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - './mlflow/Dockerfile.simple'
+      - '-t'
+      - 'gcr.io/${PROJECT_ID}/mlflow-server:${_TAG}'
+      - '-t'
+      - 'gcr.io/${PROJECT_ID}/mlflow-server:latest'
+      - './mlflow'
+
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/${PROJECT_ID}/mlflow-server:${_TAG}'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/${PROJECT_ID}/mlflow-server:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'mlflow-server'
+      - '--image=gcr.io/${PROJECT_ID}/mlflow-server:${_TAG}'
+      - '--region=${_REGION}'
+      - '--platform=managed'
+      - '--port=8080'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--min-instances=1'
+      - '--max-instances=2'
+      - '--timeout=600'
+      - '--set-secrets=MLFLOW_S3_ENDPOINT_URL=mlflow-s3-endpoint:latest,AWS_ACCESS_KEY_ID=mlflow-s3-access-key:latest,AWS_SECRET_ACCESS_KEY=mlflow-s3-secret-key:latest,MLFLOW_BUCKET_NAME=mlflow-bucket-name:latest,MLFLOW_ADMIN_USER=mlflow-admin-user:latest,MLFLOW_ADMIN_PASSWORD=mlflow-admin-password:latest'
+      - '--allow-unauthenticated'
+
+# Substitution variables
+substitutions:
+  _REGION: 'asia-southeast2'  # Jakarta
+  _TAG: 'v1'  # Default tag for manual builds
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+# Store images
+images:
+  - 'gcr.io/${PROJECT_ID}/mlflow-server:${_TAG}'
+  - 'gcr.io/${PROJECT_ID}/mlflow-server:latest'

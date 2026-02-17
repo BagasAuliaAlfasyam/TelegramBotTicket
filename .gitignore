@@ -1,38 +1,72 @@
-# Python cache/bytecode
+# ============================================================
+# Python
+# ============================================================
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
 
 # Virtual environments
 .venv/
 venv/
 env/
 
-# Local configuration / secrets
+# ============================================================
+# Secrets & credentials  (NEVER commit)
+# ============================================================
 .env
 .env.local
-*.json
-!pyproject.json
+.env.production
+white-set-293710-9cca41a1afd6.json
+*.secret.json
+*.pem
+*.key
 
-# Tooling / editor noise
+# ============================================================
+# Editor / IDE
+# ============================================================
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Logs and temp files
+# ============================================================
+# Logs & temp
+# ============================================================
 *.log
 *.tmp
-*.swp
 state_cache.json
 
-# Legacy backup (migration artifacts)
+# ============================================================
+# Legacy code (old monolith)
+# ============================================================
 legacy_backup/
+_old_monolith/
 
-# Model files (large) - ignore all model artifacts
-models/v*/
-models/*.txt
-models/*.pkl
-models/*.json
+# ============================================================
+# Model artifacts — stored in MLflow Registry
+# ============================================================
+models/
+mlruns/
 
-# Keep models folder structure
-!models/.gitkeep
+# ============================================================
+# MLflow local dev data
+# ============================================================
+mlflow/minio_data/
+mlflow/.htpasswd
+mlflow.db
+
+# ============================================================
+# Docker runtime state (not code)
+# ============================================================
+collector-state/
+
+# ============================================================
+# Test scripts (local only)
+# ============================================================
+test_predict.sh

@@ -1,0 +1,30 @@
+# Cloud Build ignore file
+# Minimal ignore - include src/ and scripts/ for training
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Local secrets
+.env
+.env.local
+
+# Editor files
+.vscode/
+.idea/
+
+# Temp files
+*.log
+*.tmp
+state_cache.json
+
+# Don't need in build
+legacy_backup/
+mlruns/
+mlflow/minio_data/
+

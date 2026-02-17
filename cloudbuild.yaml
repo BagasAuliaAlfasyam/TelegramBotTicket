@@ -1,0 +1,124 @@
+# ============================================================
+# Cloud Build — Build & push all microservice images
+# ============================================================
+# Builds 5 custom service images in parallel, pushes to
+# Artifact Registry.
+#
+# Usage (manual):
+#   gcloud builds submit --config=cloudbuild.yaml \
+#     --substitutions=_IMAGE_TAG=latest
+#
+# Triggered automatically by GitHub Actions on push to main.
+# ============================================================
+
+substitutions:
+  _IMAGE_TAG: "latest"
+  _REGION: "asia-southeast2"
+  _PROJECT_ID: ${PROJECT_ID}
+  _REPO: "microservices"
+  _REGISTRY: "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+# ── Build steps (parallel where possible) ────────────────────
+steps:
+  # ── Step 0: Create Artifact Registry repo if not exists ──
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        gcloud artifacts repositories describe ${_REPO} \
+          --location=${_REGION} --format="value(name)" 2>/dev/null \
+        || gcloud artifacts repositories create ${_REPO} \
+          --repository-format=docker \
+          --location=${_REGION} \
+          --description="TelegramBotMyTech microservices"
+    id: "create-repo"
+
+  # ── Step 1: Build prediction-api ─────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGISTRY}/prediction-api:${_IMAGE_TAG}"
+      - "-t"
+      - "${_REGISTRY}/prediction-api:latest"
+      - "-f"
+      - "services/prediction/Dockerfile"
+      - "."
+    id: "build-prediction"
+    waitFor: ["create-repo"]
+
+  # ── Step 2: Build training-api ───────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGISTRY}/training-api:${_IMAGE_TAG}"
+      - "-t"
+      - "${_REGISTRY}/training-api:latest"
+      - "-f"
+      - "services/training/Dockerfile"
+      - "."
+    id: "build-training"
+    waitFor: ["create-repo"]
+
+  # ── Step 3: Build data-api ──────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGISTRY}/data-api:${_IMAGE_TAG}"
+      - "-t"
+      - "${_REGISTRY}/data-api:latest"
+      - "-f"
+      - "services/data/Dockerfile"
+      - "."
+    id: "build-data"
+    waitFor: ["create-repo"]
+
+  # ── Step 4: Build collector-bot ─────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGISTRY}/collector-bot:${_IMAGE_TAG}"
+      - "-t"
+      - "${_REGISTRY}/collector-bot:latest"
+      - "-f"
+      - "services/collector/Dockerfile"
+      - "."
+    id: "build-collector"
+    waitFor: ["create-repo"]
+
+  # ── Step 5: Build admin-bot ─────────────────────────────
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-t"
+      - "${_REGISTRY}/admin-bot:${_IMAGE_TAG}"
+      - "-t"
+      - "${_REGISTRY}/admin-bot:latest"
+      - "-f"
+      - "services/admin/Dockerfile"
+      - "."
+    id: "build-admin"
+    waitFor: ["create-repo"]
+
+# ── Push images to Artifact Registry ─────────────────────────
+images:
+  - "${_REGISTRY}/prediction-api:${_IMAGE_TAG}"
+  - "${_REGISTRY}/prediction-api:latest"
+  - "${_REGISTRY}/training-api:${_IMAGE_TAG}"
+  - "${_REGISTRY}/training-api:latest"
+  - "${_REGISTRY}/data-api:${_IMAGE_TAG}"
+  - "${_REGISTRY}/data-api:latest"
+  - "${_REGISTRY}/collector-bot:${_IMAGE_TAG}"
+  - "${_REGISTRY}/collector-bot:latest"
+  - "${_REGISTRY}/admin-bot:${_IMAGE_TAG}"
+  - "${_REGISTRY}/admin-bot:latest"
+
+timeout: "1200s"  # 20 min max
