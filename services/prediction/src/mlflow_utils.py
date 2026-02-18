@@ -42,6 +42,7 @@ class MLflowConfig:
     bucket_name: str
     tracking_username: str = ""
     tracking_password: str = ""
+    public_url: str = ""
 
 
 class MLflowManager:
@@ -293,7 +294,7 @@ class MLflowManager:
         status = {
             "enabled": self.is_enabled,
             "initialized": self._initialized,
-            "tracking_uri": self.config.tracking_uri if self.is_enabled else None,
+            "tracking_uri": (self.config.public_url or self.config.tracking_uri) if self.is_enabled else None,
             "model_name": self.config.model_name,
         }
 

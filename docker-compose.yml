@@ -38,6 +38,7 @@ x-mlflow-env: &mlflow-env
   MLFLOW_BUCKET_NAME: ${MLFLOW_BUCKET_NAME:-mlflow-artifacts}
   MLFLOW_TRACKING_USERNAME: ${MLFLOW_TRACKING_USERNAME}
   MLFLOW_TRACKING_PASSWORD: ${MLFLOW_TRACKING_PASSWORD}
+  MLFLOW_PUBLIC_URL: ${MLFLOW_PUBLIC_URL:-}
 
 services:
   # ============ Prediction API ============
@@ -178,21 +179,21 @@ services:
       mlflow:
         condition: service_healthy
 
-  # ============ MLflow Server ============
+  # ============ MLflow Server (nginx + basic auth) ============
   mlflow:
-    image: ghcr.io/mlflow/mlflow:v2.10.2
+    build: ./mlflow
     container_name: mlflow-server
     ports:
-      - "${MLFLOW_PORT:-5000}:5000"
+      - "${MLFLOW_PORT:-5000}:8080"
     environment:
       MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL:-http://minio:9000}
+      MLFLOW_BUCKET_NAME: ${MLFLOW_BUCKET_NAME:-mlflow-artifacts}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
-    command: ["bash", "-c", "pip install boto3 --quiet && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:///mlflow/mlflow.db --default-artifact-root s3://${MLFLOW_BUCKET_NAME:-mlflow-artifacts}"]
     volumes:
       - mlflow-data:/mlflow
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/health')\""]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
       interval: 15s
       timeout: 10s
       retries: 10

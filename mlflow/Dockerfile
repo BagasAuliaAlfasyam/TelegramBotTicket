@@ -32,10 +32,12 @@ RUN htpasswd -cb /etc/nginx/.htpasswd mytechops telkomjuara && \
 # Make entrypoint executable
 RUN chmod +x /entrypoint.sh
 
-# Expose port (Cloud Run uses 8080)
-EXPOSE 8080
+# Expose ports:
+#   8080 — nginx reverse proxy with basic auth (external/public access)
+#   5000 — raw MLflow server (internal Docker network, no auth)
+EXPOSE 8080 5000
 
-# Health check
+# Health check (direct to MLflow, bypasses nginx auth)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:5000/health || exit 1
 

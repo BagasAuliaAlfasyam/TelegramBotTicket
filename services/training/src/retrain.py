@@ -224,15 +224,33 @@ class RetrainPipeline:
             import joblib
             import mlflow
             import mlflow.lightgbm
+            import pandas as pd
+            from mlflow.data.pandas_dataset import PandasDataset
+
+            # Set auth credentials (MLflow client reads from env)
+            if self._config.mlflow_tracking_username and self._config.mlflow_tracking_password:
+                os.environ["MLFLOW_TRACKING_USERNAME"] = self._config.mlflow_tracking_username
+                os.environ["MLFLOW_TRACKING_PASSWORD"] = self._config.mlflow_tracking_password
 
             mlflow.set_tracking_uri(self._config.mlflow_tracking_uri)
             mlflow.set_experiment(self._config.mlflow_experiment_name)
 
-            with mlflow.start_run():
+            run_name = f"train-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
+            with mlflow.start_run(run_name=run_name):
                 mlflow.log_params({k: str(v) for k, v in params.items()})
                 mlflow.log_metric("f1_macro", f1_macro)
                 mlflow.log_metric("n_samples", len(texts))
                 mlflow.log_metric("n_classes", len(le.classes_))
+
+                # Log training dataset info
+                df = pd.DataFrame({"text": texts, "label": labels})
+                dataset: PandasDataset = mlflow.data.from_pandas(
+                    df,
+                    source="google-sheets://Logs+ML_Tracking",
+                    name="ticket-classifier-training",
+                    targets="label",
+                )
+                mlflow.log_input(dataset, context="training")
 
                 # Log LightGBM model via mlflow.lightgbm
                 mlflow.lightgbm.log_model(model, artifact_path="model")

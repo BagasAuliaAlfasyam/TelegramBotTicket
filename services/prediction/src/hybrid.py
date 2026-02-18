@@ -53,6 +53,7 @@ class HybridClassifier:
             bucket_name=config.mlflow_bucket_name,
             tracking_username=config.mlflow_tracking_username,
             tracking_password=config.mlflow_tracking_password,
+            public_url=config.mlflow_public_url,
         )
         self._mlflow_mgr = MLflowManager(mlflow_config)
         self._lgbm = LightGBMClassifier(self._mlflow_mgr)

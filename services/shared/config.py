@@ -43,6 +43,7 @@ class PredictionServiceConfig:
     mlflow_bucket_name: str = "mlflow-artifacts"
     mlflow_tracking_username: str = ""
     mlflow_tracking_password: str = ""
+    mlflow_public_url: str = ""
 
     # Gemini
     gemini_api_key: str = ""
@@ -70,6 +71,7 @@ class PredictionServiceConfig:
             mlflow_bucket_name=os.getenv("MLFLOW_BUCKET_NAME", "mlflow-artifacts"),
             mlflow_tracking_username=os.getenv("MLFLOW_TRACKING_USERNAME", ""),
             mlflow_tracking_password=os.getenv("MLFLOW_TRACKING_PASSWORD", ""),
+            mlflow_public_url=os.getenv("MLFLOW_PUBLIC_URL", ""),
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             gemini_model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash"),
             gemini_enabled=os.getenv("GEMINI_ENABLED", "true").lower() in ("true", "1"),
