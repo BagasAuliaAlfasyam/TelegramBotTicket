@@ -74,6 +74,13 @@ else
     pull prediction-api training-api data-api collector-bot admin-bot
 
   echo ""
+  echo ">>> Building local services (mlflow)..."
+  docker compose \
+    -f docker-compose.yml \
+    -f docker-compose.override.yml \
+    build mlflow
+
+  echo ""
   echo ">>> Deploying..."
   docker compose \
     -f docker-compose.yml \

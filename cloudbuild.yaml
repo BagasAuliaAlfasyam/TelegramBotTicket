@@ -223,6 +223,13 @@ steps:
               -f docker-compose.override.yml \
               pull prediction-api training-api data-api collector-bot admin-bot
 
+            # Build services that use local Dockerfiles (not in Artifact Registry)
+            echo '🔨 Building local services (mlflow)...'
+            docker compose \
+              -f docker-compose.yml \
+              -f docker-compose.override.yml \
+              build mlflow
+
             # Deploy (only recreates changed services)
             echo '🚀 Deploying services...'
             docker compose \
