@@ -481,7 +481,7 @@ class AdminCommandHandler:
                 # Class distribution
                 symtomps_counter = Counter(t.get("symtomps", "unknown") for t in tracking_data if t.get("symtomps"))
                 if symtomps_counter:
-                    msg += f"\n\U0001f3f7 <b>Distribusi Kelas (Top 10):</b>\n"
+                    msg += "\n\U0001f3f7 <b>Distribusi Kelas (Top 10):</b>\n"
                     # Get current model classes if available
                     current_classes = set()
                     try:
@@ -505,7 +505,7 @@ class AdminCommandHandler:
                 elif reviewed > 0:
                     msg += f"\n\u26a0\ufe0f Butuh {100 - reviewed} reviewed lagi (min 100)"
                 else:
-                    msg += f"\n\U0001f534 Belum ada data reviewed"
+                    msg += "\n\U0001f534 Belum ada data reviewed"
 
             if status == "idle":
                 msg += "\n\n\U0001f4a1 Gunakan /retrain untuk mulai training."
@@ -625,7 +625,7 @@ class AdminCommandHandler:
             if prod_ver:
                 header += f"\U0001f7e2 Production: <b>v{prod_ver}</b>\n\n"
             else:
-                header += f"\u26a0\ufe0f No Production version\n\n"
+                header += "\u26a0\ufe0f No Production version\n\n"
             msg = header
 
             if versions:
@@ -642,8 +642,8 @@ class AdminCommandHandler:
                     stage = v.get("stage", "None")
                     raw_ts = v.get("created_at")
                     if isinstance(raw_ts, (int, float)) and raw_ts > 1e12:
-                        from datetime import datetime, timezone
-                        created = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                        from datetime import UTC, datetime
+                        created = datetime.fromtimestamp(raw_ts / 1000, tz=UTC).strftime("%Y-%m-%d")
                     elif isinstance(raw_ts, str):
                         created = raw_ts[:10]
                     else:
@@ -652,7 +652,7 @@ class AdminCommandHandler:
                     desc_text = f" - {desc[:30]}" if desc else ""
                     msg += f"  {emoji} v{ver} [{stage}] ({created}){desc_text}\n"
 
-            msg += f"\n\U0001f4a1 /mlflowpromote [version] untuk promote ke Production"
+            msg += "\n\U0001f4a1 /mlflowpromote [version] untuk promote ke Production"
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("mlflowstatus failed")
@@ -1005,9 +1005,9 @@ class AdminCommandHandler:
         await self._reply(update, f"⏳ Mengambil data {app_name} bulan {bulan}/{tahun}...")
 
         try:
+            import calendar
             from collections import Counter
             from datetime import timedelta
-            import calendar
 
             data = await self._api_get(f"{self._data_url}/logs/all")
             all_rows = data.get("rows", [])
@@ -1154,8 +1154,8 @@ class AdminCommandHandler:
         await self._reply(update, f"⏳ Mengambil data minggu ke-{minggu}{app_label} bulan {bulan}/{tahun}...")
 
         try:
-            from collections import Counter, defaultdict
             import calendar
+            from collections import Counter, defaultdict
 
             data = await self._api_get(f"{self._data_url}/logs/all")
             all_rows = data.get("rows", [])
@@ -1384,8 +1384,8 @@ class TrendAlertService:
             return None
 
         header = (
-            f"\U0001f6a8 <b>TREND ALERT</b>\n"
-            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+            "\U0001f6a8 <b>TREND ALERT</b>\n"
+            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
         )
         body = "\n\n".join(alerts)
         footer = (
