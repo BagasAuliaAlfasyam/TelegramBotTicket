@@ -38,6 +38,8 @@ def build_application(config: AdminBotConfig) -> Application:
 
     # -- Laporan --
     app.add_handler(CommandHandler("tiketreport", handler.tiket_report))
+    app.add_handler(CommandHandler("trendbulan", handler.trend_bulan))
+    app.add_handler(CommandHandler("trendmingguan", handler.trend_mingguan))
 
     # -- Help --
     app.add_handler(CommandHandler("help", handler.help_admin))
@@ -54,6 +56,8 @@ def build_application(config: AdminBotConfig) -> Application:
             BotCommand("retrainstatus", "🔄 Cek progress training"),
             BotCommand("reloadmodel", "🔃 Load model terbaru"),
             BotCommand("tiketreport", "📋 Laporan tiket & SLA"),
+            BotCommand("trendbulan", "📊 Top symtomps bulanan per app"),
+            BotCommand("trendmingguan", "📅 Top symtomps mingguan"),
         ]
         await application.bot.set_my_commands(commands)
 

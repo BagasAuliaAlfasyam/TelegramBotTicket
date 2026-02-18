@@ -74,9 +74,13 @@ class AdminCommandHandler:
             "├ /retrainstatus — Cek progress training\n"
             "└ /reloadmodel — Load model terbaru\n\n"
             "📋 <b>LAPORAN TIKET</b>\n"
-            "└ /tiketreport — Laporan tiket &amp; SLA\n"
-            "   <code>/tiketreport monthly [bln] [thn] [MIT|MIS]</code>\n"
-            "   <code>/tiketreport quarterly [q] [thn] [MIT|MIS]</code>\n\n"
+            "├ /tiketreport — Laporan tiket &amp; SLA\n"
+            "│  <code>/tiketreport monthly [bln] [thn] [MIT|MIS]</code>\n"
+            "│  <code>/tiketreport quarterly [q] [thn] [MIT|MIS]</code>\n"
+            "├ /trendbulan — Top 10 symtomps per app\n"
+            "│  <code>/trendbulan MIT [bln] [thn]</code>\n"
+            "└ /trendmingguan — Top 5 symtomps per minggu\n"
+            "   <code>/trendmingguan [minggu] [bln] [thn] [MIT|MIS]</code>\n\n"
             "💡 <i>Semua command bisa langsung di-tap!</i>"
         )
         await self._reply(update, msg)
@@ -609,3 +613,309 @@ class AdminCommandHandler:
         except Exception as e:
             _LOGGER.exception("tiketreport failed")
             await self._reply(update, f"❌ Gagal membuat laporan tiket.\n<code>{e}</code>")
+
+    # =================== /trendbulan ===================
+    async def trend_bulan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /trendbulan [MIT|MIS] [bulan] [tahun]
+        Top 10 Symtomps per aplikasi dalam bulan tertentu.
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+
+        args = ctx.args or []
+        _APP_NAMES = {"MIT": "MyTech", "MIS": "MyStaff"}
+
+        if not args:
+            await self._reply(
+                update,
+                "📖 <b>Cara pakai:</b>\n"
+                "  <code>/trendbulan MIT</code> → MyTech bulan ini\n"
+                "  <code>/trendbulan MIS</code> → MyStaff bulan ini\n"
+                "  <code>/trendbulan MIT 12 2025</code> → MyTech Des 2025\n\n"
+                "<b>Keterangan:</b> MIT = MyTech | MIS = MyStaff",
+            )
+            return
+
+        app_type = args[0].upper()
+        if app_type not in _APP_NAMES:
+            await self._reply(update, f"❌ Aplikasi '{args[0]}' tidak valid.\nGunakan <b>MIT</b> (MyTech) atau <b>MIS</b> (MyStaff)")
+            return
+
+        app_name = _APP_NAMES[app_type]
+        today = datetime.now(TZ).date()
+
+        try:
+            bulan = int(args[1]) if len(args) > 1 else today.month
+            tahun = int(args[2]) if len(args) > 2 else today.year
+            if not 1 <= bulan <= 12:
+                await self._reply(update, "❌ Bulan harus 1-12")
+                return
+        except ValueError:
+            await self._reply(update, "❌ Format bulan/tahun tidak valid. Gunakan angka.")
+            return
+
+        nama_bulan = [
+            "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+            "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+        ]
+
+        await self._reply(update, f"⏳ Mengambil data {app_name} bulan {bulan}/{tahun}...")
+
+        try:
+            from collections import Counter
+            from datetime import timedelta
+            import calendar
+
+            data = await self._api_get(f"{self._data_url}/logs/all")
+            all_rows = data.get("rows", [])
+            if len(all_rows) <= 1:
+                await self._reply(update, "❌ Tidak ada data di Logs sheet.")
+                return
+
+            headers = [h.strip() for h in all_rows[0]]
+
+            def _col(*names: str) -> int:
+                for n in names:
+                    nl = n.lower()
+                    for i, h in enumerate(headers):
+                        if h.lower() == nl:
+                            return i
+                return -1
+
+            date_col = _col("Ticket Date", "Column 1")
+            app_col = _col("App")
+            symtomps_col = _col("Symtomps")
+
+            last_day = calendar.monthrange(tahun, bulan)[1]
+            start_date = datetime(tahun, bulan, 1).date()
+            end_date = datetime(tahun, bulan, last_day).date()
+
+            total_tickets = 0
+            symtomps_counter: Counter = Counter()
+
+            for row in all_rows[1:]:
+                if len(row) <= date_col or not row[date_col]:
+                    continue
+
+                # App filter
+                if app_col != -1:
+                    row_app = row[app_col].strip().upper() if len(row) > app_col else ""
+                    if row_app != app_type:
+                        continue
+
+                # Parse date
+                date_str = row[date_col].split()[0]
+                ticket_date = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
+                    try:
+                        ticket_date = datetime.strptime(date_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                if not ticket_date or ticket_date < start_date or ticket_date > end_date:
+                    continue
+
+                total_tickets += 1
+                if symtomps_col != -1 and len(row) > symtomps_col and row[symtomps_col].strip():
+                    symtomps_counter[row[symtomps_col].strip()] += 1
+
+            if total_tickets == 0:
+                await self._reply(
+                    update,
+                    f"📊 <b>Trend Tiket {app_name} ({app_type})</b>\n"
+                    f"📅 Periode: {nama_bulan[bulan]} {tahun}\n\n"
+                    f"Tidak ada tiket ditemukan untuk periode ini.",
+                )
+                return
+
+            top_sym = symtomps_counter.most_common(10)
+            msg = (
+                f"📊 <b>Trend Tiket {app_name} ({app_type})</b>\n"
+                f"📅 Periode: {nama_bulan[bulan]} {tahun}\n"
+                f"📋 Total: <b>{total_tickets:,}</b> tiket\n\n"
+                f"<b>Top 10 Symtomps:</b>\n"
+            )
+            for i, (sym, count) in enumerate(top_sym, 1):
+                pct = count / total_tickets * 100
+                msg += f"  {i}. {sym} — {count} ({pct:.1f}%)\n"
+
+            if len(symtomps_counter) > 10:
+                others = sum(c for s, c in symtomps_counter.items() if s not in dict(top_sym))
+                msg += f"\n<i>+{len(symtomps_counter) - 10} symtomps lainnya ({others} tiket)</i>"
+
+            await self._reply(update, msg)
+
+        except Exception as e:
+            _LOGGER.exception("trendbulan failed")
+            await self._reply(update, f"❌ Gagal mengambil trend bulanan.\n<code>{e}</code>")
+
+    # =================== /trendmingguan ===================
+    async def trend_mingguan(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /trendmingguan [minggu] [bulan] [tahun] [MIT|MIS]
+        Top 5 Symtomps per minggu dengan contoh tiket.
+
+        Pembagian minggu: 1=1-7, 2=8-14, 3=15-21, 4=22-28, 5=29-31
+        """
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+
+        args = ctx.args or []
+        today = datetime.now(TZ).date()
+        _APP_NAMES = {"MIT": "MyTech", "MIS": "MyStaff"}
+
+        current_week = min((today.day - 1) // 7 + 1, 5)
+
+        try:
+            minggu = int(args[0]) if len(args) > 0 else current_week
+            bulan = int(args[1]) if len(args) > 1 else today.month
+            tahun = int(args[2]) if len(args) > 2 else today.year
+            app_type = args[3].upper() if len(args) > 3 else None
+
+            if not 1 <= minggu <= 5:
+                await self._reply(
+                    update,
+                    "❌ Minggu harus 1-5\n\n"
+                    "• Minggu 1: tanggal 1-7\n• Minggu 2: tanggal 8-14\n"
+                    "• Minggu 3: tanggal 15-21\n• Minggu 4: tanggal 22-28\n"
+                    "• Minggu 5: tanggal 29-31",
+                )
+                return
+            if not 1 <= bulan <= 12:
+                await self._reply(update, "❌ Bulan harus 1-12")
+                return
+            if app_type and app_type not in _APP_NAMES:
+                await self._reply(
+                    update,
+                    f"❌ Aplikasi '{args[3]}' tidak valid.\n"
+                    "Gunakan <b>MIT</b> (MyTech) atau <b>MIS</b> (MyStaff), atau kosongkan.",
+                )
+                return
+        except ValueError:
+            await self._reply(
+                update,
+                "📖 <b>Cara pakai:</b>\n"
+                "  <code>/trendmingguan</code> → Minggu ini\n"
+                "  <code>/trendmingguan 2</code> → Minggu ke-2 bulan ini\n"
+                "  <code>/trendmingguan 1 12 2025 MIT</code> → Minggu 1 Des 2025 MyTech\n\n"
+                "<b>Minggu:</b> 1=tgl 1-7 | 2=8-14 | 3=15-21 | 4=22-28 | 5=29-31",
+            )
+            return
+
+        app_label = f" {_APP_NAMES[app_type]}" if app_type else ""
+        nama_bulan = [
+            "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+            "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+        ]
+
+        await self._reply(update, f"⏳ Mengambil data minggu ke-{minggu}{app_label} bulan {bulan}/{tahun}...")
+
+        try:
+            from collections import Counter, defaultdict
+            import calendar
+
+            data = await self._api_get(f"{self._data_url}/logs/all")
+            all_rows = data.get("rows", [])
+            if len(all_rows) <= 1:
+                await self._reply(update, "❌ Tidak ada data di Logs sheet.")
+                return
+
+            headers = [h.strip() for h in all_rows[0]]
+
+            def _col(*names: str) -> int:
+                for n in names:
+                    nl = n.lower()
+                    for i, h in enumerate(headers):
+                        if h.lower() == nl:
+                            return i
+                return -1
+
+            date_col = _col("Ticket Date", "Column 1")
+            app_col = _col("App")
+            symtomps_col = _col("Symtomps")
+            raw_text_col = _col("tech raw text")
+
+            last_day_of_month = calendar.monthrange(tahun, bulan)[1]
+            week_ranges = {1: (1, 7), 2: (8, 14), 3: (15, 21), 4: (22, 28), 5: (29, last_day_of_month)}
+            start_day, end_day = week_ranges[minggu]
+            end_day = min(end_day, last_day_of_month)
+
+            if start_day > last_day_of_month:
+                await self._reply(
+                    update,
+                    f"❌ Bulan {bulan}/{tahun} tidak memiliki minggu ke-{minggu}\n"
+                    f"(Bulan ini hanya sampai tanggal {last_day_of_month})",
+                )
+                return
+
+            start_date = datetime(tahun, bulan, start_day).date()
+            end_date = datetime(tahun, bulan, end_day).date()
+
+            total_tickets = 0
+            symtomps_counter: Counter = Counter()
+            ticket_examples: dict[str, list[str]] = defaultdict(list)
+
+            for row in all_rows[1:]:
+                if len(row) <= date_col or not row[date_col]:
+                    continue
+
+                # App filter
+                if app_type and app_col != -1:
+                    row_app = row[app_col].strip().upper() if len(row) > app_col else ""
+                    if row_app != app_type:
+                        continue
+
+                # Parse date
+                date_str = row[date_col].split()[0]
+                ticket_date = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
+                    try:
+                        ticket_date = datetime.strptime(date_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                if not ticket_date or ticket_date < start_date or ticket_date > end_date:
+                    continue
+
+                total_tickets += 1
+
+                symtomps = row[symtomps_col].strip() if symtomps_col != -1 and len(row) > symtomps_col else ""
+                raw_text = row[raw_text_col].strip() if raw_text_col != -1 and len(row) > raw_text_col else ""
+
+                if symtomps:
+                    symtomps_counter[symtomps] += 1
+                    if len(ticket_examples[symtomps]) < 3:
+                        ticket_name = (raw_text[:50] + "...") if len(raw_text) > 50 else raw_text
+                        if ticket_name:
+                            ticket_examples[symtomps].append(ticket_name)
+
+            if total_tickets == 0:
+                await self._reply(
+                    update,
+                    f"📅 <b>Trend Mingguan{app_label}</b>\n"
+                    f"Minggu ke-{minggu} ({start_day}-{end_day} {nama_bulan[bulan]} {tahun})\n\n"
+                    f"Tidak ada tiket ditemukan untuk periode ini.",
+                )
+                return
+
+            top_sym = symtomps_counter.most_common(5)
+
+            msg = (
+                f"📅 <b>Trend Mingguan{app_label}</b>\n"
+                f"Minggu ke-{minggu} ({start_day}-{end_day} {nama_bulan[bulan]} {tahun})\n"
+                f"📋 Total: <b>{total_tickets:,}</b> tiket\n\n"
+                f"<b>Top 5 Symtomps:</b>\n"
+            )
+
+            for i, (sym, count) in enumerate(top_sym, 1):
+                pct = count / total_tickets * 100
+                msg += f"\n  {i}. <b>{sym}</b> — {count} tiket ({pct:.1f}%)\n"
+                for ex in ticket_examples.get(sym, [])[:3]:
+                    msg += f"     └ <i>{ex}</i>\n"
+
+            await self._reply(update, msg)
+
+        except Exception as e:
+            _LOGGER.exception("trendmingguan failed")
+            await self._reply(update, f"❌ Gagal mengambil trend mingguan.\n<code>{e}</code>")
