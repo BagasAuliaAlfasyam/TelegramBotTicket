@@ -1,297 +1,211 @@
 # TelegramBotMyTech
 
-Automated IT Support Ticket Classification Bot for MyTech team.
+Automated IT Support Ticket Classification System for MyTech — built with LightGBM + Gemini Knowledge Distillation cascade, deployed as containerized services on GCP.
 
-## Features
+## Architecture
 
-- 🤖 **ML Classification**: Automatic symptom classification using LightGBM
-- 📊 **Google Sheets Integration**: Auto-logging tickets to spreadsheet
-- 📁 **S3 Media Upload**: Store ticket attachments in S3
-- 📈 **Admin Dashboard**: Telegram commands for monitoring
-- 🔄 **Auto-retrain**: Script for model retraining with new data
+```text
+┌────────────────────────────────────────────────────────────────┐
+│                     Nginx Gateway (:80)                        │
+│   /api/predict  → Prediction API                               │
+│   /api/data/    → Data API                                     │
+│   /api/training → Training API                                 │
+│   /mlflow/      → MLflow UI                                    │
+└──────────┬──────────────┬──────────────┬───────────────────────┘
+           │              │              │
+  ┌────────▼────┐  ┌──────▼────┐  ┌──────▼──────┐
+  │ Prediction  │  │  Data API │  │  Training   │
+  │ API :8001   │  │   :8002   │  │  API :8005  │
+  │             │  │           │  │             │
+  │ LightGBM +  │  │ Sheets    │  │ Retrain     │
+  │ Gemini      │  │ S3/MinIO  │  │ Pipeline    │
+  │ Cascade     │  │ Tracking  │  │             │
+  └──────┬──────┘  └─────┬─────┘  └──────┬──────┘
+         │               │               │
+  ┌──────▼───────────────▼───────────────▼───────┐
+  │             MLflow :5000 + MinIO :9000        │
+  └──────────────────────────────────────────────┘
+           │                    │
+  ┌────────▼──────┐   ┌────────▼────────┐
+  │ Collector Bot │   │   Admin Bot     │
+  │ (Telegram)    │   │   (Telegram)    │
+  └───────────────┘   └─────────────────┘
+```
+
+## Services
+
+| Service | Port | Description |
+|---------|------|-------------|
+| **prediction-api** | 8001 | ML Prediction — LightGBM + Gemini cascade |
+| **data-api** | 8002 | Google Sheets CRUD, S3 upload, ML Tracking |
+| **training-api** | 8005 | Retraining pipeline with MLflow tracking |
+| **collector-bot** | — | Telegram bot: collects ops replies, auto-classifies |
+| **admin-bot** | — | Telegram bot: admin commands, reports, monitoring |
+| **mlflow** | 5000 | MLflow Tracking Server |
+| **minio** | 9000 | S3-compatible object storage |
 
 ## Project Structure
 
 ```
 TelegramBotMyTech/
-├── src/                          # Main source code
-│   ├── __init__.py
-│   ├── core/                     # Core configuration
-│   │   ├── __init__.py
-│   │   └── config.py
-│   ├── ml/                       # ML components
-│   │   ├── __init__.py
-│   │   ├── preprocessing.py      # Domain-aware text preprocessing
-│   │   ├── classifier.py         # ML model wrapper
-│   │   └── tracking.py           # Audit trail & monitoring
-│   ├── bots/                     # Telegram bot handlers
-│   │   ├── __init__.py
-│   │   ├── collector.py          # Ops reply collector
-│   │   ├── admin.py              # Admin command handlers
-│   │   ├── parsers.py            # Message parsing utils
-│   │   └── sla.py                # SLA calculation
-│   └── services/                 # External integrations
-│       ├── __init__.py
-│       ├── sheets.py             # Google Sheets client
-│       └── storage.py            # S3 uploader
-├── scripts/                      # Entry points
-│   ├── run_all.py                # 🌟 Unified: Run both bots in one process
-│   ├── run_collecting.py         # Start collecting bot only
-│   └── run_reporting.py          # Start reporting bot only
-├── models/                       # ML model artifacts (versioned)
-│   ├── v1/
-│   │   ├── lgb_model.bin
-│   │   ├── tfidf_vectorizer.pkl
-│   │   └── label_encoder.pkl
-│   ├── current_version.txt      # Active version pointer
-│   └── versions.json            # Version history
-├── .env                          # Environment variables
-├── .env.local                    # Local overrides (gitignored)
-├── requirements.txt
+├── services/
+│   ├── prediction/              # ML prediction (LightGBM + Gemini cascade)
+│   ├── data/                    # Google Sheets, S3, ML tracking
+│   ├── training/                # Retrain pipeline
+│   ├── collector/               # Telegram collector bot
+│   ├── admin/                   # Telegram admin bot
+│   └── shared/                  # Shared models & config
+├── mlflow/                      # MLflow server config
+├── scripts/                     # Deploy & test scripts
+├── docker-compose.yml           # Base compose (dev, with build:)
+├── docker-compose.override.yml  # Prod override (prebuilt images)
+├── cloudbuild.yaml              # CI/CD pipeline
+├── pyproject.toml               # Ruff linter config
+├── .env.template                # Environment template
 └── README.md
 ```
 
-## Setup
+## Quick Start
 
-### 1. Install Dependencies
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-
-Create `.env` file:
-
-```env
-# Telegram Bot Tokens
-TELEGRAM_BOT_TOKEN=your_collecting_bot_token
-TELEGRAM_BOT_TOKEN_REPORTING=your_reporting_bot_token
-
-# Chat IDs
-OPS_CHAT_ID=123456789
-TECH_CHAT_ID=123456789
-ADMIN_CHAT_ID=123456789
-
-# Google Sheets
-GOOGLE_SERVICE_ACCOUNT_JSON=service_account.json
-GOOGLE_SPREADSHEET_NAME=Log_Tiket_MyTech
-GOOGLE_WORKSHEET_NAME=Logs
-
-# AWS S3
-AWS_ACCESS_KEY_ID=your_key
-AWS_SECRET_ACCESS_KEY=your_secret
-S3_BUCKET_NAME=your_bucket
-S3_REGION=ap-southeast-1
-
-# ML Settings
-MODEL_VERSION=auto  # auto = read from current_version.txt
-ML_THRESHOLD_AUTO=0.75
-GEMINI_CASCADE_THRESHOLD=0.75
-
-# Optional
-ADMIN_USER_IDS=123456789,987654321
-TIMEZONE=Asia/Jakarta
-DEBUG=false
-```
-
-### 3. Setup Google Sheets
-
-1. Create a Google Cloud project
-2. Enable Google Sheets API
-3. Create a service account
-4. Download JSON credentials as `service_account.json`
-5. Share the spreadsheet with service account email
-
-## Running
-
-### 🌟 Recommended: Run Both Bots Together
+### 1. Configure Environment
 
 ```bash
-python scripts/run_all.py
+cp .env.template .env.local
+# Edit .env.local with your values
 ```
 
-This runs **both Collecting and Reporting bots** in a single process.
+### 2. Run Locally (Dev)
 
-### Run Individual Bots (for debugging)
-
-Collecting Bot only:
 ```bash
-python scripts/run_collecting.py
+docker compose --env-file .env.local up -d --build
 ```
 
-Reporting Bot only:
+### 3. Run with Pre-built Images (Prod)
+
 ```bash
-python scripts/run_reporting.py
+export IMAGE_REGISTRY=asia-southeast2-docker.pkg.dev/mytech-480618/microservices/
+export IMAGE_TAG=latest
+docker compose -f docker-compose.yml -f docker-compose.override.yml \
+  --env-file .env.local up -d --no-build
 ```
 
-### Retrain Model (Manual Trigger)
+## ML Classification
 
-Training bisa dilakukan via:
-- **Notebook** (untuk full Optuna tuning) - folder `Analyst/`
-- **Script** (untuk quick retrain) - `scripts/retrain.py`
-- **Telegram** (hot reload) - `/retrain` command via admin bot
+### 2-Tier Prediction System
 
-Lihat section "Retraining Model" di bawah.
+The system uses LightGBM with Gemini Knowledge Distillation cascade:
 
-## CI/CD Pipeline
+| Status | Confidence | Action |
+|--------|------------|--------|
+| **AUTO** | ≥ 75% | Auto-applied (LightGBM + Gemini cascade) |
+| **REVIEW** | < 75% | Requires manual review |
 
-**Cloud Build** is used for all CI/CD automation:
+### Flow
 
-- **Lint** — Python code quality checks with ruff
-- **Validate** — Dockerfile & docker-compose syntax validation
-- **Build** — Parallel Docker image builds for all 5 microservices
-- **Deploy** — Automatic deployment to GCP VM (main branch only)
-- **Health Check** — Verify all services are running after deploy
+1. Message received → LightGBM predicts symptom + confidence
+2. If confidence < 75% and Gemini enabled → Gemini cascade validates
+3. If Gemini agrees with LightGBM → boost confidence, use prediction
+4. If Gemini disagrees → use Gemini's prediction with adjusted confidence
+5. Final status: AUTO (≥ 75%) or REVIEW (< 75%)
 
-**For detailed setup instructions, see [CICD_SETUP.md](CICD_SETUP.md)**
-
-## ML Admin Commands
+## Admin Bot Commands
 
 | Command | Description |
 |---------|-------------|
 | `/stats` | Today's prediction statistics |
-| `/report weekly` | Weekly performance report |
-| `/report monthly` | Monthly performance report |
-| `/modelstatus` | Current model information |
-| `/pendingreview` | Items pending review |
-| `/retrainstatus` | Check retrain readiness |
-| `/retrain` | **🔥 Retrain + auto-reload (all in Telegram!)** |
-| `/retrain force` | Force retrain tanpa check threshold |
-| `/reloadmodel [v3]` | Hot reload model manual |
-| `/helpml` | Show help message |
+| `/report` | Performance report (weekly/monthly) |
+| `/tiketreport` | Ticket report with SLA analysis |
+| `/modelstatus` | Current model info & thresholds |
+| `/mlflowstatus` | MLflow model versions |
+| `/mlflowpromote` | Promote model version to Production |
+| `/pendingreview` | Items pending manual review |
+| `/retrainstatus` | Training readiness check |
+| `/retrain` | Trigger model retraining |
+| `/reloadmodel` | Hot-reload model (no restart) |
+| `/updatestats` | Refresh monitoring statistics |
+| `/trendbulan` | Monthly trend analysis |
+| `/trendmingguan` | Weekly trend analysis |
+| `/helpml` | Show all commands |
 
-## ML Classification Thresholds (2-Tier)
+## Google Sheets
 
-Sistem menggunakan **2-tier** sederhana karena Gemini cascade sudah menangani grey zone:
+| Sheet | Purpose |
+|-------|---------|
+| **Logs** (20 cols) | All ticket data — message, classification, SLA |
+| **ML_Tracking** (8 cols) | Prediction audit trail for review & retrain |
+| **Monitoring** (9 cols) | Daily aggregated statistics |
 
-| Status | Confidence | Action |
-|--------|------------|--------|
-| AUTO | ≥75% | Auto-applied (LightGBM + Gemini cascade) |
-| REVIEW | <75% | Perlu review manual |
+## CI/CD
 
-## Retraining Model
+Cloud Build pipeline triggered by GitHub push:
 
-Ada **2 cara** untuk retrain model:
-
-### 📓 Option A: Via Notebooks (Recommended for Major Updates)
-
-Full pipeline dengan Optuna hyperparameter tuning.
-
-```
-Analyst/
-├── 01_DataExploration.ipynb    # Data loading & exploration
-├── 02_Preprocessing.ipynb      # Text cleaning & TF-IDF
-├── 03_Training.ipynb           # Model training & optimization
-├── 04_SemiSupervised.ipynb     # Semi-supervised labeling
-├── 05_RelabelKendalaLogin.ipynb # Specific relabeling tasks
-└── 06_UpdateMasterData.ipynb   # Update master dataset
+```text
+GitHub Push → Cloud Build → Lint → Validate → Build → Push → Deploy → Health Check
 ```
 
-**Workflow:**
+| Branch | Action |
+|--------|--------|
+| `main` | Full CI/CD: lint + build + deploy to VM |
+| `develop` | CI only: lint + build (no deploy) |
 
-1. Jalankan notebook berurutan: `01 → 02 → 03`
-2. Copy artifacts: `Analyst/artifacts/` → `TelegramBotMyTech/models/`
-3. Update `.env`: `MODEL_VERSION=v3`
-4. Restart: `python scripts/run_all.py`
-
-### 🚀 Option B: Via Script (Quick Retrain)
-
-Script untuk quick retrain yang **match pipeline notebook** (word+char TF-IDF, LightGBM, Calibration):
+### Manual Deploy (on VM)
 
 ```bash
-# Manual retrain (selalu jalan)
-python scripts/retrain.py
-
-# Check threshold dulu (hanya retrain jika reviewed ≥ 100)
-python scripts/retrain.py --check-threshold 100
-
-# Force retrain (skip check)
-python scripts/retrain.py --force
-
-# Dengan custom master data
-python scripts/retrain.py --master-data ../Analyst/artifacts/training_data.csv
+./scripts/deploy.sh              # Pull from Artifact Registry
+./scripts/deploy.sh --local      # Build locally
+./scripts/deploy.sh --tag abc123 # Deploy specific tag
 ```
 
-**What retrain.py does:**
-1. Load Master data + Reviewed data dari ML_Tracking sheet
-2. Preprocess dengan ITSupportTextPreprocessor (match notebook)
-3. TF-IDF: Word (1-3 ngram) + Char (3-5 ngram)
-4. Train LightGBM dengan params optimal (from Optuna)
-5. Probability calibration
-6. Save artifacts ke `models/`
+### Rollback
 
-**After retrain (pilih salah satu):**
-- 🔥 **Hot Reload** (no restart): `/reloadmodel v3` via Telegram
-- 🔄 **Restart**: Update `.env` → `MODEL_VERSION=v3` → `python scripts/run_all.py`
+```bash
+# On VM — deploy previous version
+export IMAGE_TAG=<previous-commit-sha>
+export IMAGE_REGISTRY=asia-southeast2-docker.pkg.dev/mytech-480618/microservices/
+docker compose -f docker-compose.yml -f docker-compose.override.yml \
+  --env-file .env.local pull
+docker compose -f docker-compose.yml -f docker-compose.override.yml \
+  --env-file .env.local up -d --no-build
+```
 
-### Kapan Pakai Apa?
+## CI/CD Setup (One-time)
 
-| Scenario | Use |
-|----------|-----|
-| Major update, banyak class baru | Notebook (with Optuna) |
-| Quick retrain, data corrections | Script |
-| Production auto-retrain | Script with `--check-threshold` |
+### Prerequisites
 
-### Kenapa Notebook Tetap Diperlukan?
+```bash
+# Enable GCP APIs
+gcloud services enable \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  compute.googleapis.com \
+  --project=mytech-480618
 
-- ✅ **Optuna tuning**: Script pakai params yang sudah di-tune, notebook bisa re-tune
-- ✅ **Interactive**: Bisa lihat metrics, confusion matrix, per-class F1
-- ✅ **Char n-grams**: Handle typos lebih baik
-- ✅ **Probability calibration**: Lebih akurat confidence scores
-- ✅ **Iterative**: Bisa experiment dan debug
+# Configure Artifact Registry auth on VM
+gcloud auth configure-docker asia-southeast2-docker.pkg.dev --quiet
+```
 
-## Architecture
+### Cloud Build Triggers
 
-### Text Preprocessing
+Create two triggers in Cloud Console → Cloud Build → Triggers:
 
-The preprocessing pipeline is consistent between training and inference:
+1. **CI (develop)**: Branch `^develop$`, substitution `_DEPLOY_ENABLED=false`
+2. **CI/CD (main)**: Branch `^main$`, substitution `_DEPLOY_ENABLED=true`
 
-1. URL removal
-2. Email removal
-3. Phone number removal
-4. WO/SC/Ticket ID normalization
-5. Abbreviation expansion (moban → mohon bantuan, etc.)
-6. IT terms preservation (OTP, TOTP, WO, SC, etc.)
-7. Lowercase conversion
-8. Punctuation removal
-9. Whitespace normalization
-10. [SEP] token merging (Tech text [SEP] Solving text)
+### Troubleshooting
 
-### Google Sheets Structure
+```bash
+# Check ruff locally
+ruff check services/
 
-**Logs (A-T):**
-- Ticket info, technician message, ops response, SLA, Symtomps
+# Test Docker build locally
+docker build -f services/prediction/Dockerfile -t test .
 
-**ML_Tracking:**
-- Prediction audit trail for review and retrain
+# Check service logs on VM
+docker compose logs prediction-api --tail=50
 
-**Monitoring:**
-- Daily aggregated statistics
-
-## Legacy Files
-
-✅ **All legacy files have been removed!** The project now uses clean architecture exclusively.
-
-If you need to reference old code, check `legacy_backup/` folder (not tracked in git).
-
-### Migration Summary
-
-| Old File | New Location |
-|----------|-------------|
-| `main_collecting.py` | `scripts/run_collecting.py` |
-| `main_reporting.py` | `scripts/run_reporting.py` |
-| `collecting_bot.py` | `src/bots/collector.py` |
-| `admin_commands.py` | `src/bots/admin.py` |
-| `ml_classifier.py` | `src/ml/classifier.py` |
-| `ml_tracking.py` | `src/ml/tracking.py` |
-| `google_sheets_client.py` | `src/services/sheets.py` |
-| `s3_uploader.py` | `src/services/storage.py` |
-| `config.py` | `src/core/config.py` |
-| `ops_parser.py` | `src/bots/parsers.py` |
-| `retrain_model.py` | `scripts/retrain.py` |
+# Restart a service
+docker compose restart prediction-api
+```
 
 ## License
 

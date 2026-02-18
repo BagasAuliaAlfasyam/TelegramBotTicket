@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r /app/services/data/requirements.txt
 
 COPY services/data/ /app/services/data/
 
-# Copy service account JSON (will be mounted via volume in production)
-# COPY white-set-293710-9cca41a1afd6.json /app/service_account.json
+# Service account JSON is mounted via volume in docker-compose
+# COPY service_account.json /app/service_account.json
 
 EXPOSE 8002
 

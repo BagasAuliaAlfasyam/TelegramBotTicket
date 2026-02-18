@@ -1,7 +1,7 @@
 [project]
 name = "telegram-bot-mytech"
 version = "2.0.0"
-description = "Telegram Bot MyTech — Microservices Architecture"
+description = "Telegram Bot MyTech — IT Support Ticket Classification"
 requires-python = ">=3.11"
 
 [tool.ruff]

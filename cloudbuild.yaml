@@ -87,8 +87,8 @@ steps:
         export TELEGRAM_BOT_TOKEN_COLLECTING=_dummy
         export TELEGRAM_BOT_TOKEN_REPORTING=_dummy
         export ADMIN_USER_IDS=_dummy
-        docker compose -f docker-compose.microservices.yml config --quiet
-        echo "✓ docker-compose.microservices.yml is valid"
+        docker compose -f docker-compose.yml config --quiet
+        echo "✓ docker-compose.yml is valid"
     id: "validate-compose"
     waitFor: ["validate-dockerfiles"]
 
@@ -206,6 +206,12 @@ steps:
             echo '📥 Pulling latest code from GitHub...'
             git pull origin main --ff-only
 
+            # Rename SA file if old name still exists (one-time migration)
+            if [ -f white-set-293710-9cca41a1afd6.json ] && [ ! -f service_account.json ]; then
+              mv white-set-293710-9cca41a1afd6.json service_account.json
+              echo '🔑 Renamed service account file'
+            fi
+
             # Set image registry and tag
             export IMAGE_REGISTRY=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/
             export IMAGE_TAG=${_IMAGE_TAG}
@@ -213,16 +219,16 @@ steps:
             # Pull pre-built images from Artifact Registry
             echo '📦 Pulling Docker images...'
             docker compose \
-              -f docker-compose.microservices.yml \
-              -f docker-compose.prod.yml \
+              -f docker-compose.yml \
+              -f docker-compose.override.yml \
               --env-file .env.local \
               pull prediction-api training-api data-api collector-bot admin-bot
 
             # Deploy (only recreates changed services)
             echo '🚀 Deploying services...'
             docker compose \
-              -f docker-compose.microservices.yml \
-              -f docker-compose.prod.yml \
+              -f docker-compose.yml \
+              -f docker-compose.override.yml \
               --env-file .env.local \
               up -d --no-build
 

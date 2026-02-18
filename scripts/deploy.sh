@@ -56,7 +56,7 @@ if [[ "$MODE" == "local" ]]; then
   echo ""
   echo ">>> Building & deploying locally..."
   docker compose \
-    -f docker-compose.microservices.yml \
+    -f docker-compose.yml \
     --env-file .env.local \
     up -d --build
 
@@ -70,16 +70,16 @@ else
 
   echo ">>> Pulling images (tag: ${TAG})..."
   docker compose \
-    -f docker-compose.microservices.yml \
-    -f docker-compose.prod.yml \
+    -f docker-compose.yml \
+    -f docker-compose.override.yml \
     --env-file .env.local \
     pull prediction-api training-api data-api collector-bot admin-bot
 
   echo ""
   echo ">>> Deploying..."
   docker compose \
-    -f docker-compose.microservices.yml \
-    -f docker-compose.prod.yml \
+    -f docker-compose.yml \
+    -f docker-compose.override.yml \
     --env-file .env.local \
     up -d --no-build
 fi

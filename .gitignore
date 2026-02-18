@@ -21,7 +21,7 @@ env/
 .env
 .env.local
 .env.production
-white-set-293710-9cca41a1afd6.json
+service_account.json
 *.secret.json
 *.pem
 *.key
@@ -69,4 +69,4 @@ collector-state/
 # ============================================================
 # Test scripts (local only)
 # ============================================================
-test_predict.sh
+test_*.sh
