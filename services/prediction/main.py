@@ -171,6 +171,43 @@ async def health():
     )
 
 
+# ============ MLflow Registry Endpoints ============
+
+@app.get("/mlflow/status")
+async def mlflow_status():
+    """Get MLflow registry status and model versions."""
+    if not classifier or not classifier._mlflow_mgr:
+        raise HTTPException(503, "MLflow not configured")
+
+    mlflow_mgr = classifier._mlflow_mgr
+    if not mlflow_mgr.is_enabled:
+        return {"enabled": False, "message": "MLflow not enabled"}
+
+    if not mlflow_mgr._initialized:
+        mlflow_mgr.init()
+
+    status = mlflow_mgr.get_status()
+    versions = mlflow_mgr.get_model_versions(limit=10)
+    status["versions"] = versions
+    return status
+
+
+@app.post("/mlflow/promote")
+async def mlflow_promote(version: str, stage: str = "Production"):
+    """Promote a model version to Production/Staging."""
+    if not classifier or not classifier._mlflow_mgr:
+        raise HTTPException(503, "MLflow not configured")
+
+    mlflow_mgr = classifier._mlflow_mgr
+    if not mlflow_mgr.is_enabled or not mlflow_mgr._initialized:
+        raise HTTPException(503, "MLflow not initialized")
+
+    result = mlflow_mgr.transition_model_stage(version, stage)
+    if not result["success"]:
+        raise HTTPException(400, result["message"])
+    return result
+
+
 # ============ Entry Point ============
 
 if __name__ == "__main__":

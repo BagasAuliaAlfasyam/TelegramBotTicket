@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from services.admin.src.bot import AdminCommandHandler
+from services.admin.src.bot import AdminCommandHandler, TrendAlertService
 from services.shared.config import AdminBotConfig, setup_logging
 from telegram import BotCommand
 from telegram.ext import Application, ApplicationBuilder, CommandHandler
@@ -35,6 +35,9 @@ def build_application(config: AdminBotConfig) -> Application:
     app.add_handler(CommandHandler("retrain", handler.retrain))
     app.add_handler(CommandHandler("retrainstatus", handler.retrain_status))
     app.add_handler(CommandHandler("reloadmodel", handler.reload_model))
+    app.add_handler(CommandHandler("updatestats", handler.update_stats))
+    app.add_handler(CommandHandler("mlflowstatus", handler.mlflow_status))
+    app.add_handler(CommandHandler("mlflowpromote", handler.mlflow_promote))
 
     # -- Laporan --
     app.add_handler(CommandHandler("tiketreport", handler.tiket_report))
@@ -58,8 +61,24 @@ def build_application(config: AdminBotConfig) -> Application:
             BotCommand("tiketreport", "📋 Laporan tiket & SLA"),
             BotCommand("trendbulan", "📊 Top symtomps bulanan per app"),
             BotCommand("trendmingguan", "📅 Top symtomps mingguan"),
+            BotCommand("updatestats", "📊 Update statistik hourly"),
+            BotCommand("mlflowstatus", "📦 Status MLflow registry"),
+            BotCommand("mlflowpromote", "🏆 Promote model version"),
         ]
         await application.bot.set_my_commands(commands)
+
+        # Start TrendAlertService if admin_chat_id is set
+        admin_ids = config.admin_user_ids
+        if admin_ids:
+            alert_service = TrendAlertService(
+                data_url=config.data_api_url,
+                prediction_url=config.prediction_api_url,
+                bot=application.bot,
+                admin_chat_id=admin_ids[0],  # Alert to first admin
+                interval_seconds=3600,
+            )
+            await alert_service.start()
+            application.bot_data["alert_service"] = alert_service
 
     app.post_init = post_init
     return app

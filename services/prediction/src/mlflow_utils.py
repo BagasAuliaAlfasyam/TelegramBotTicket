@@ -312,3 +312,44 @@ class MLflowManager:
                 pass
 
         return status
+
+    def get_model_versions(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Get registered model versions with stage info."""
+        if not self._initialized:
+            return []
+        try:
+            mlflow, _ = _import_mlflow()
+            client = mlflow.tracking.MlflowClient()
+            search = client.search_model_versions(f"name='{self.config.model_name}'")
+            versions = sorted(search, key=lambda v: int(v.version), reverse=True)[:limit]
+            return [
+                {
+                    "version": v.version,
+                    "stage": v.current_stage,
+                    "run_id": v.run_id,
+                    "created_at": v.creation_timestamp,
+                    "description": v.description or "",
+                }
+                for v in versions
+            ]
+        except Exception as e:
+            _LOGGER.error("Failed to get model versions: %s", e)
+            return []
+
+    def transition_model_stage(self, version: str, stage: str = "Production") -> dict[str, Any]:
+        """Promote/transition a model version to a new stage."""
+        if not self._initialized:
+            return {"success": False, "message": "MLflow not initialized"}
+        try:
+            mlflow, _ = _import_mlflow()
+            client = mlflow.tracking.MlflowClient()
+            client.transition_model_version_stage(
+                name=self.config.model_name,
+                version=version,
+                stage=stage,
+                archive_existing_versions=(stage == "Production"),
+            )
+            return {"success": True, "version": version, "stage": stage, "message": f"Version {version} → {stage}"}
+        except Exception as e:
+            _LOGGER.error("Failed to transition model %s to %s: %s", version, stage, e)
+            return {"success": False, "message": str(e)}

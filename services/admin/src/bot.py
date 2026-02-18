@@ -6,6 +6,7 @@ No direct Google Sheets or ML model access.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -57,6 +58,40 @@ class AdminCommandHandler:
         resp.raise_for_status()
         return resp.json()
 
+    @staticmethod
+    def _analyze_trend(stats: dict) -> str:
+        """Auto-generate trend insights from stats."""
+        insights: list[str] = []
+        total = stats.get("total_predictions", 0)
+        if total == 0:
+            return ""
+        auto = stats.get("auto_count", 0)
+        manual = stats.get("manual_count", 0)
+        auto_rate = auto / total * 100
+        manual_rate = manual / total * 100
+        avg_conf = stats.get("avg_confidence", 0)
+
+        if auto_rate >= 90:
+            insights.append("\u2705 Excellent automation rate")
+        elif auto_rate >= 80:
+            insights.append("\u2705 Good automation rate")
+        elif auto_rate < 70:
+            insights.append("\u26a0\ufe0f Low automation rate — consider retraining")
+
+        if avg_conf >= 90:
+            insights.append("\u2705 High model confidence")
+        elif avg_conf < 80:
+            insights.append("\u26a0\ufe0f Avg confidence dropping — monitor closely")
+
+        if manual_rate > 20:
+            insights.append("\U0001f534 High manual classification rate")
+
+        pending = stats.get("pending_count", 0)
+        if pending > 50:
+            insights.append(f"\U0001f4cb Large review queue ({pending:,} pending)")
+
+        return "\n".join(insights) if insights else "No significant trends detected."
+
     # =================== /help ===================
     async def help_admin(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not self._is_admin(update.effective_user.id):
@@ -68,11 +103,15 @@ class AdminCommandHandler:
             "├ /stats — Dashboard ML real-time\n"
             "├ /report — Laporan mingguan/bulanan\n"
             "├ /modelstatus — Info model &amp; Gemini\n"
-            "└ /pendingreview — Tiket perlu review\n\n"
+            "├ /pendingreview — Tiket perlu review\n"
+            "└ /updatestats — Hitung ulang stats harian\n\n"
             "🔧 <b>MODEL MANAGEMENT</b>\n"
             "├ /retrain — Training ulang model\n"
             "├ /retrainstatus — Cek progress training\n"
-            "└ /reloadmodel — Load model terbaru\n\n"
+            "├ /reloadmodel — Load model terbaru\n"
+            "├ /mlflowstatus — Status MLflow registry\n"
+            "└ /mlflowpromote — Promote version\n"
+            "   <code>/mlflowpromote [version]</code>\n\n"
             "📋 <b>LAPORAN TIKET</b>\n"
             "├ /tiketreport — Laporan tiket &amp; SLA\n"
             "│  <code>/tiketreport monthly [bln] [thn] [MIT|MIS]</code>\n"
@@ -172,8 +211,14 @@ class AdminCommandHandler:
                 f"  🔶 HIGH: {s.get('high_review_count', 0):,}\n"
                 f"  🟡 MEDIUM: {s.get('medium_review_count', 0):,}\n"
                 f"  🔴 MANUAL: {s.get('manual_count', 0):,}\n"
-                f"  📝 Reviewed: {s.get('reviewed_count', 0):,}"
+                f"  📝 Reviewed: {s.get('reviewed_count', 0):,}\n"
             )
+
+            # Trend analysis
+            trend = self._analyze_trend(s)
+            if trend:
+                msg += f"\n<b>📈 Trend Analysis:</b>\n{trend}"
+
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("report failed")
@@ -203,13 +248,40 @@ class AdminCommandHandler:
                 f"📊 Classes: <b>{m.get('num_classes', 0)}</b>\n"
                 f"✅ Loaded: {'Ya ✅' if m.get('is_loaded') else 'Tidak ❌'}\n"
                 f"🤖 Gemini: {'Aktif ✅' if m.get('gemini_enabled') else 'Nonaktif ❌'}\n"
-                f"📅 Trained: {trained_at}\n\n"
-                f"<b>Thresholds:</b>\n"
-                f"  AUTO ≥ {thresholds.get('AUTO', 0.80)}\n"
-                f"  HIGH ≥ {thresholds.get('HIGH_REVIEW', 0.70)}\n"
-                f"  MEDIUM ≥ {thresholds.get('MEDIUM_REVIEW', 0.50)}\n\n"
-                f"<b>Top Classes:</b>\n  {top_classes}"
+                f"📅 Trained: {trained_at}\n"
             )
+
+            # Training metrics
+            accuracy = m.get("training_accuracy")
+            samples = m.get("training_samples")
+            if accuracy:
+                try:
+                    msg += f"🎯 Training Accuracy: <b>{float(accuracy)*100:.1f}%</b>\n"
+                except (ValueError, TypeError):
+                    pass
+            if samples:
+                msg += f"📋 Training Samples: <b>{samples:,}</b>\n"
+
+            msg += (
+                f"\n<b>Thresholds:</b>\n"
+                f"  ✅ AUTO ≥ {float(thresholds.get('AUTO', 0.80))*100:.0f}%\n"
+                f"  🔶 HIGH ≥ {float(thresholds.get('HIGH_REVIEW', 0.70))*100:.0f}%\n"
+                f"  🟡 MEDIUM ≥ {float(thresholds.get('MEDIUM_REVIEW', 0.50))*100:.0f}%\n"
+                f"  🔴 MANUAL &lt; {float(thresholds.get('MEDIUM_REVIEW', 0.50))*100:.0f}%\n"
+            )
+
+            # MLflow info
+            mlflow_info = m.get("mlflow", {})
+            if mlflow_info.get("enabled"):
+                prod = mlflow_info.get("production_model", {})
+                prod_ver = prod.get("version", "—")
+                msg += (
+                    f"\n<b>☁️ MLflow:</b>\n"
+                    f"  URI: <code>{mlflow_info.get('tracking_uri', '—')}</code>\n"
+                    f"  🟢 Production: v{prod_ver}\n"
+                )
+
+            msg += f"\n<b>Top Classes:</b>\n  {top_classes}"
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("modelstatus failed")
@@ -225,17 +297,29 @@ class AdminCommandHandler:
             reviewed = s.get("reviewed_count", 0)
             total = pending + reviewed
 
+            # Priority breakdown from confidence distribution
+            manual = s.get("manual_count", 0)
+            high = s.get("high_count", 0)
+            medium = s.get("medium_count", 0)
+
             msg = (
                 f"📋 <b>Review Status</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"⏳ Pending: <b>{pending:,}</b>\n"
                 f"✅ Reviewed: <b>{reviewed:,}</b>\n"
                 f"📊 Total: {total:,}\n\n"
+                f"<b>Priority Breakdown:</b>\n"
+                f"  🔴 MANUAL (Critical): {manual:,}\n"
+                f"  🔶 HIGH REVIEW: {high:,}\n"
+                f"  🟡 MEDIUM REVIEW: {medium:,}\n"
             )
+
             if pending == 0:
-                msg += "🎉 Semua prediksi sudah di-review!"
+                msg += "\n🎉 Semua prediksi sudah di-review!"
+            elif pending > 50:
+                msg += f"\n⚠️ <b>{pending}</b> prediksi perlu review — prioritaskan MANUAL!"
             else:
-                msg += f"⚠️ Ada <b>{pending}</b> prediksi yang perlu review."
+                msg += f"\n⚠️ Ada <b>{pending}</b> prediksi yang perlu review."
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("pendingreview failed")
@@ -254,44 +338,116 @@ class AdminCommandHandler:
             if a.startswith("tune") and a[4:].isdigit():
                 tune_trials = int(a[4:])
 
+        # Check reviewed count threshold (unless force)
+        if not force:
+            try:
+                s = await self._api_get(f"{self._data_url}/stats/realtime")
+                reviewed = s.get("reviewed_count", 0)
+                if reviewed < 100:
+                    await self._reply(
+                        update,
+                        f"⚠️ <b>Data belum cukup</b>\n\n"
+                        f"Reviewed: {reviewed}/100 minimum\n"
+                        f"Butuh {100 - reviewed} lagi.\n\n"
+                        f"Gunakan <code>/retrain force</code> untuk skip pengecekan.",
+                    )
+                    return
+            except Exception:
+                pass
+
         mode_text = f"Optuna {tune_trials} trials" if tune else "Fixed params"
-        await self._reply(
-            update,
+        progress_msg = await update.message.reply_text(
             f"🚀 <b>Memulai Training...</b>\n\n"
             f"Mode: {mode_text}{' (force)' if force else ''}\n"
-            f"⏳ Proses berjalan di background...",
+            f"⏳ Proses berjalan...",
+            parse_mode="HTML",
+            reply_to_message_id=update.message.message_id,
         )
+
         try:
             r = await self._api_post(
                 f"{self._training_url}/train",
                 json={"force": force, "tune": tune, "tune_trials": tune_trials},
-                timeout=300.0,
+                timeout=10.0,
             )
+
             if r.get("status") == "running":
-                await self._reply(
-                    update,
-                    "✅ <b>Training dimulai!</b>\n\n"
-                    "Gunakan:\n"
-                    "├ /retrainstatus — Cek progress\n"
-                    "└ /reloadmodel — Load model setelah selesai",
-                )
+                # Async progress polling
+                asyncio.create_task(self._poll_training(progress_msg))
             elif r.get("success") and r.get("f1_score"):
-                await self._reply(
-                    update,
+                await progress_msg.edit_text(
                     f"✅ <b>Training Selesai!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━━\n\n"
                     f"📦 Model: <code>{r.get('model_version', '?')}</code>\n"
                     f"🎯 F1 Score: <b>{r.get('f1_score', 'N/A')}</b>\n"
                     f"📊 Samples: {r.get('n_samples', '?'):,}\n\n"
-                    f"➡️ Gunakan /reloadmodel untuk load model baru.",
+                    f"➡️ /reloadmodel untuk load model baru\n"
+                    f"➡️ /mlflowpromote untuk promote ke Production",
+                    parse_mode="HTML",
                 )
             else:
-                await self._reply(update, f"❌ Training gagal: {r.get('message', 'unknown')}")
+                await progress_msg.edit_text(
+                    f"❌ Training gagal: {r.get('message', 'unknown')}",
+                    parse_mode="HTML",
+                )
         except httpx.TimeoutException:
-            await self._reply(update, "⏳ Training berjalan di background (timeout > 5min).\nCek /retrainstatus nanti.")
+            # Training started but took too long for initial response — poll
+            asyncio.create_task(self._poll_training(progress_msg))
         except Exception as e:
             _LOGGER.exception("retrain failed")
-            await self._reply(update, f"❌ Gagal memulai training.\n<code>{e}</code>")
+            await progress_msg.edit_text(f"❌ Gagal memulai training.\n<code>{e}</code>", parse_mode="HTML")
+
+    async def _poll_training(self, msg) -> None:
+        """Poll training status and live-edit the progress message."""
+        import time as _time
+        start = _time.time()
+        last_status = ""
+        try:
+            for _ in range(120):  # max 30 min (120 * 15s)
+                await asyncio.sleep(15)
+                elapsed = int(_time.time() - start)
+                mm, ss = divmod(elapsed, 60)
+                try:
+                    r = await self._api_get(f"{self._training_url}/status")
+                except Exception:
+                    continue
+
+                status = r.get("status", "unknown")
+                if status == "completed":
+                    result = r.get("last_result", {})
+                    await msg.edit_text(
+                        f"✅ <b>Training Selesai!</b> ({mm}m {ss}s)\n"
+                        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+                        f"🎯 F1 Score: <b>{result.get('f1_score', 'N/A')}</b>\n"
+                        f"📊 Samples: {result.get('n_samples', '?')}\n"
+                        f"📦 Version: <code>{result.get('model_version', '?')}</code>\n\n"
+                        f"➡️ /reloadmodel untuk load model baru\n"
+                        f"➡️ /mlflowpromote untuk promote ke Production",
+                        parse_mode="HTML",
+                    )
+                    # Auto-reload and mark trained
+                    try:
+                        await self._api_post(f"{self._prediction_url}/model/reload", json={"stage": "Staging"})
+                        await self._api_post(f"{self._data_url}/training/mark")
+                    except Exception:
+                        pass
+                    return
+                elif status == "failed":
+                    await msg.edit_text(
+                        f"❌ <b>Training Gagal</b> ({mm}m {ss}s)\n\n"
+                        f"{r.get('last_result', {}).get('message', 'Unknown error')}",
+                        parse_mode="HTML",
+                    )
+                    return
+                elif status != last_status:
+                    last_status = status
+                    await msg.edit_text(
+                        f"🔄 <b>Training...</b> ({mm}m {ss}s)\n\n"
+                        f"Status: {status}",
+                        parse_mode="HTML",
+                    )
+        except Exception as e:
+            _LOGGER.exception("Training poll failed: %s", e)
 
     # =================== /retrainstatus ===================
     async def retrain_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -301,27 +457,81 @@ class AdminCommandHandler:
             r = await self._api_get(f"{self._training_url}/status")
             d = await self._api_get(f"{self._data_url}/training/data")
             total = d.get("total_samples", 0)
+            tracking_data = d.get("tracking_data", [])
 
             status = r.get("status", "idle")
-            status_emoji = {"idle": "💤", "running": "🔄", "completed": "✅", "failed": "❌"}.get(status, "❓")
+            status_emoji = {"idle": "\U0001f4a4", "running": "\U0001f504", "completed": "\u2705", "failed": "\u274c"}.get(status, "\u2753")
             last_trained = r.get("last_trained", "belum pernah")
 
             msg = (
-                f"🔄 <b>Training Status</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"📊 Training Data: <b>{total:,}</b> samples\n"
+                f"\U0001f504 <b>Training Status</b>\n"
+                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
                 f"{status_emoji} Status: <b>{status}</b>\n"
-                f"📅 Terakhir Train: {last_trained}\n"
+                f"\U0001f4c5 Terakhir Train: {last_trained}\n"
+                f"\U0001f4ca Total Data: <b>{total:,}</b> samples\n"
             )
 
+            # Class distribution from tracking data
+            if tracking_data:
+                from collections import Counter
+                # Count by review status
+                reviewed = sum(1 for t in tracking_data if t.get("review_status") in ("APPROVED", "CORRECTED"))
+                trained = sum(1 for t in tracking_data if t.get("review_status") == "TRAINED")
+                auto_approved = sum(1 for t in tracking_data if t.get("review_status") == "auto_approved")
+
+                msg += (
+                    f"\n\U0001f4cb <b>Data Breakdown:</b>\n"
+                    f"\u251c \u2705 Reviewed (siap train): <b>{reviewed}</b>\n"
+                    f"\u251c \U0001f393 Sudah Trained: <b>{trained}</b>\n"
+                    f"\u2514 \U0001f916 Auto-approved: <b>{auto_approved}</b>\n"
+                )
+
+                # Class distribution
+                symtomps_counter = Counter(t.get("symtomps", "unknown") for t in tracking_data if t.get("symtomps"))
+                if symtomps_counter:
+                    msg += f"\n\U0001f3f7 <b>Distribusi Kelas (Top 10):</b>\n"
+                    # Get current model classes if available
+                    current_classes = set()
+                    try:
+                        model_info = await self._api_get(f"{self._prediction_url}/model/info")
+                        current_classes = set(model_info.get("classes", []))
+                    except Exception:
+                        pass
+
+                    for cls, cnt in symtomps_counter.most_common(10):
+                        new_badge = " \U0001f195" if current_classes and cls not in current_classes else ""
+                        msg += f"  {cls}: <b>{cnt}</b>{new_badge}\n"
+
+                    if current_classes:
+                        new_classes = set(symtomps_counter.keys()) - current_classes
+                        if new_classes:
+                            msg += f"\n\U0001f195 <b>{len(new_classes)} kelas baru</b> terdeteksi!\n"
+
+                # Readiness check
+                if reviewed >= 100:
+                    msg += f"\n\u2705 <b>READY</b> - Data cukup untuk training ({reviewed} reviewed)"
+                elif reviewed > 0:
+                    msg += f"\n\u26a0\ufe0f Butuh {100 - reviewed} reviewed lagi (min 100)"
+                else:
+                    msg += f"\n\U0001f534 Belum ada data reviewed"
+
             if status == "idle":
-                msg += "\n💡 Gunakan /retrain untuk mulai training."
+                msg += "\n\n\U0001f4a1 Gunakan /retrain untuk mulai training."
             elif status == "running":
-                msg += "\n⏳ Training sedang berjalan..."
+                msg += "\n\n\u23f3 Training sedang berjalan..."
+            elif status == "completed":
+                last_result = r.get("last_result", {})
+                if last_result:
+                    msg += (
+                        f"\n\n\U0001f3c6 <b>Hasil Terakhir:</b>\n"
+                        f"\u251c \U0001f3af F1: {last_result.get('f1_score', 'N/A')}\n"
+                        f"\u251c \U0001f4e6 Version: {last_result.get('model_version', '?')}\n"
+                        f"\u2514 \U0001f4ca Samples: {last_result.get('n_samples', '?')}"
+                    )
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("retrainstatus failed")
-            await self._reply(update, f"❌ Gagal mengambil status training.\n<code>{e}</code>")
+            await self._reply(update, f"\u274c Gagal mengambil status training.\n<code>{e}</code>")
 
     # =================== /reloadmodel ===================
     async def reload_model(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -353,6 +563,139 @@ class AdminCommandHandler:
         except Exception as e:
             _LOGGER.exception("reloadmodel failed")
             await self._reply(update, f"❌ Gagal reload model.\n<code>{e}</code>")
+
+    # =================== /updatestats ===================
+    async def update_stats(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Trigger hourly stats calculation and write to Monitoring sheet."""
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+        await self._reply(update, "\U0001f504 Menghitung statistik...")
+        try:
+            # Get current model version
+            model_version = "unknown"
+            try:
+                mi = await self._api_get(f"{self._prediction_url}/model/info")
+                model_version = mi.get("version", "unknown")
+            except Exception:
+                pass
+
+            r = await self._api_post(
+                f"{self._data_url}/stats/hourly",
+                params={"model_version": model_version},
+                timeout=30.0,
+            )
+            if r.get("success"):
+                st = r.get("stats", {})
+                total = st.get("total_predictions", 0)
+                auto = st.get("auto_count", 0)
+                manual = st.get("manual_count", 0)
+                reviewed = st.get("reviewed_count", 0)
+                pending = st.get("pending_count", 0)
+                conf = st.get("avg_confidence", 0)
+                auto_rate = (auto / total * 100) if total > 0 else 0
+
+                await self._reply(
+                    update,
+                    f"\u2705 <b>Stats Updated!</b>\n"
+                    f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+                    f"\U0001f4e6 Model: <code>{model_version}</code>\n"
+                    f"\U0001f4ca Total Prediksi: <b>{total:,}</b>\n"
+                    f"\U0001f916 Auto-classified: <b>{auto:,}</b> ({auto_rate:.1f}%)\n"
+                    f"\u270d\ufe0f Manual: <b>{manual:,}</b>\n"
+                    f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
+                    f"\u23f3 Pending: <b>{pending:,}</b>\n"
+                    f"\U0001f3af Avg Confidence: <b>{conf:.1%}</b>\n\n"
+                    f"\U0001f4dd Ditulis ke sheet Monitoring.",
+                )
+            else:
+                await self._reply(update, f"\u274c Gagal update stats: {r.get('detail', 'unknown')}")
+        except Exception as e:
+            _LOGGER.exception("updatestats failed")
+            await self._reply(update, f"\u274c Gagal update stats.\n<code>{e}</code>")
+
+    # =================== /mlflowstatus ===================
+    async def mlflow_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Show MLflow model registry status with all versions."""
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+        try:
+            r = await self._api_get(f"{self._prediction_url}/mlflow/status")
+            versions = r.get("versions", [])
+            prod_ver = r.get("production_version")
+
+            msg = (
+                f"\U0001f4ca <b>MLflow Status</b>\n"
+                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+                f"\U0001f3e2 Tracking: <code>{r.get('tracking_uri', '?')}</code>\n"
+                f"\U0001f4e6 Model: <code>{r.get('model_name', '?')}</code>\n"
+                f"\U0001f7e2 Production: <b>v{prod_ver}</b>\n\n" if prod_ver else
+                f"\U0001f4ca <b>MLflow Status</b>\n"
+                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+                f"\U0001f3e2 Tracking: <code>{r.get('tracking_uri', '?')}</code>\n"
+                f"\U0001f4e6 Model: <code>{r.get('model_name', '?')}</code>\n"
+                f"\u26a0\ufe0f No Production version\n\n"
+            )
+
+            if versions:
+                stage_emoji = {
+                    "Production": "\U0001f7e2",
+                    "Staging": "\U0001f7e1",
+                    "Archived": "\u26aa",
+                    "None": "\u26ab",
+                }
+                msg += "\U0001f4cb <b>Model Versions:</b>\n"
+                for v in versions[:10]:
+                    emoji = stage_emoji.get(v.get("stage", "None"), "\u26ab")
+                    ver = v.get("version", "?")
+                    stage = v.get("stage", "None")
+                    created = v.get("created_at", "?")[:10] if v.get("created_at") else "?"
+                    desc = v.get("description", "")
+                    desc_text = f" - {desc[:30]}" if desc else ""
+                    msg += f"  {emoji} v{ver} [{stage}] ({created}){desc_text}\n"
+
+            msg += f"\n\U0001f4a1 /mlflowpromote [version] untuk promote ke Production"
+            await self._reply(update, msg)
+        except Exception as e:
+            _LOGGER.exception("mlflowstatus failed")
+            await self._reply(update, f"\u274c Gagal mengambil MLflow status.\n<code>{e}</code>")
+
+    # =================== /mlflowpromote ===================
+    async def mlflow_promote(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """Promote a model version to Production stage."""
+        if not update.effective_user or not self._is_admin(update.effective_user.id):
+            return
+        args = ctx.args or []
+        if not args or not args[0].isdigit():
+            await self._reply(
+                update,
+                "\u26a0\ufe0f <b>Usage:</b> <code>/mlflowpromote [version]</code>\n\n"
+                "Contoh: <code>/mlflowpromote 3</code>\n\n"
+                "\U0001f4a1 Gunakan /mlflowstatus untuk melihat daftar version.",
+            )
+            return
+
+        version = args[0]
+        stage = args[1].capitalize() if len(args) > 1 else "Production"
+
+        await self._reply(update, f"\U0001f504 Promoting v{version} to {stage}...")
+        try:
+            r = await self._api_post(
+                f"{self._prediction_url}/mlflow/promote",
+                params={"version": version, "stage": stage},
+            )
+            if r.get("success"):
+                await self._reply(
+                    update,
+                    f"\u2705 <b>Model Promoted!</b>\n\n"
+                    f"\U0001f4e6 Version: <b>v{r.get('version', version)}</b>\n"
+                    f"\U0001f3c6 Stage: <b>{r.get('stage', stage)}</b>\n\n"
+                    f"\u27a1\ufe0f Gunakan /reloadmodel untuk load model baru.",
+                )
+            else:
+                await self._reply(update, f"\u274c Promote gagal: {r.get('message', 'unknown')}")
+        except Exception as e:
+            _LOGGER.exception("mlflowpromote failed")
+            await self._reply(update, f"\u274c Gagal promote model.\n<code>{e}</code>")
 
     # =================== /tiketreport ===================
     async def tiket_report(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -919,3 +1262,136 @@ class AdminCommandHandler:
         except Exception as e:
             _LOGGER.exception("trendmingguan failed")
             await self._reply(update, f"❌ Gagal mengambil trend mingguan.\n<code>{e}</code>")
+
+
+# ============================================================
+# TrendAlertService — Background auto-alert for anomalies
+# ============================================================
+
+class TrendAlertService:
+    """
+    Background service that periodically checks stats and sends
+    alerts to admin chat when thresholds are breached.
+    """
+
+    # Thresholds
+    AUTO_RATE_MIN = 0.70        # Alert if automation rate drops below 70%
+    MANUAL_RATE_MAX = 0.25      # Alert if manual rate exceeds 25%
+    CONFIDENCE_MIN = 0.80       # Alert if avg confidence drops below 80%
+    PENDING_MAX = 50            # Alert if pending queue exceeds 50
+
+    def __init__(
+        self,
+        data_url: str,
+        prediction_url: str,
+        bot,                    # telegram.Bot instance
+        admin_chat_id: int,
+        interval_seconds: int = 3600,  # default: check every hour
+    ):
+        self._data_url = data_url
+        self._prediction_url = prediction_url
+        self._bot = bot
+        self._chat_id = admin_chat_id
+        self._interval = interval_seconds
+        self._task: asyncio.Task | None = None
+        self._client = httpx.AsyncClient(timeout=15.0)
+
+    async def start(self) -> None:
+        """Start the background alert loop."""
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._loop())
+            _LOGGER.info("TrendAlertService started (interval=%ds)", self._interval)
+
+    async def stop(self) -> None:
+        """Stop the background alert loop."""
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        await self._client.aclose()
+        _LOGGER.info("TrendAlertService stopped")
+
+    async def _loop(self) -> None:
+        """Main loop that periodically checks and alerts."""
+        while True:
+            try:
+                await asyncio.sleep(self._interval)
+                alert = await self.check_and_alert()
+                if alert:
+                    await self._bot.send_message(
+                        chat_id=self._chat_id,
+                        text=alert,
+                        parse_mode="HTML",
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                _LOGGER.exception("TrendAlertService error: %s", e)
+                await asyncio.sleep(60)  # Back off on error
+
+    async def check_and_alert(self) -> str | None:
+        """
+        Evaluate current stats against thresholds.
+        Returns alert message if any threshold is breached, else None.
+        """
+        try:
+            r = await self._client.get(f"{self._data_url}/stats/realtime")
+            r.raise_for_status()
+            stats = r.json()
+        except Exception:
+            return None
+
+        total = stats.get("total_predictions", 0)
+        if total == 0:
+            return None
+
+        auto = stats.get("auto_count", 0)
+        manual = stats.get("manual_count", 0)
+        pending = stats.get("pending_count", 0)
+        confidence = stats.get("avg_confidence", 0)
+
+        auto_rate = auto / total
+        manual_rate = manual / total
+
+        alerts: list[str] = []
+
+        if auto_rate < self.AUTO_RATE_MIN:
+            alerts.append(
+                f"\U0001f534 <b>Automation Rate Turun!</b>\n"
+                f"  Rate: {auto_rate:.1%} (threshold: {self.AUTO_RATE_MIN:.0%})"
+            )
+
+        if manual_rate > self.MANUAL_RATE_MAX:
+            alerts.append(
+                f"\U0001f7e0 <b>Manual Rate Tinggi!</b>\n"
+                f"  Rate: {manual_rate:.1%} (threshold: {self.MANUAL_RATE_MAX:.0%})"
+            )
+
+        if confidence < self.CONFIDENCE_MIN:
+            alerts.append(
+                f"\u26a0\ufe0f <b>Confidence Rendah!</b>\n"
+                f"  Avg: {confidence:.1%} (threshold: {self.CONFIDENCE_MIN:.0%})"
+            )
+
+        if pending > self.PENDING_MAX:
+            alerts.append(
+                f"\U0001f4e5 <b>Pending Queue Penuh!</b>\n"
+                f"  Count: {pending} (threshold: {self.PENDING_MAX})"
+            )
+
+        if not alerts:
+            return None
+
+        header = (
+            f"\U0001f6a8 <b>TREND ALERT</b>\n"
+            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+        )
+        body = "\n\n".join(alerts)
+        footer = (
+            f"\n\n\U0001f4ca Total: {total:,} | Auto: {auto:,} | Manual: {manual:,}\n"
+            f"\U0001f4a1 Gunakan /report untuk detail lengkap."
+        )
+
+        return header + body + footer
