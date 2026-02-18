@@ -89,6 +89,7 @@ class GoogleSheetsClient:
             for row in all_data[1:]:
                 if len(row) >= 20 and row[19]:
                     training_data.append({
+                        "tech_message_id": row[3] if len(row) > 3 else "",
                         "tech_raw_text": row[6] if len(row) > 6 else "",
                         "solving": row[11] if len(row) > 11 else "",
                         "symtomps": row[19],

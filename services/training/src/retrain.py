@@ -113,21 +113,13 @@ class RetrainPipeline:
         tracking_data = data.get("tracking_data", [])
         _LOGGER.info("From Logs: %d, From ML_Tracking: %d", len(logs_data), len(tracking_data))
 
-        # 2. Combine and prepare training data
+        # 2. Combine and prepare training data (deduplicate by tech_message_id)
+        #    ML_Tracking has priority (manually curated), Logs fills the rest
         texts = []
         labels = []
+        seen_ids: set[str] = set()
 
-        for row in logs_data:
-            text = self._preprocessor.preprocess(
-                row.get("tech_raw_text", ""),
-                row.get("solving", ""),
-            )
-            label = row.get("symtomps", "").strip()
-            if text and label:
-                norm = LABEL_MAPPING.get(label.lower(), label)
-                texts.append(text)
-                labels.append(norm)
-
+        # Process ML_Tracking first (higher priority — curated data)
         for row in tracking_data:
             text = self._preprocessor.preprocess(
                 row.get("tech_raw_text", ""),
@@ -138,6 +130,31 @@ class RetrainPipeline:
                 norm = LABEL_MAPPING.get(label.lower(), label)
                 texts.append(text)
                 labels.append(norm)
+                mid = row.get("tech_message_id", "").strip()
+                if mid:
+                    seen_ids.add(mid)
+
+        # Then process Logs, skipping duplicates already in ML_Tracking
+        skipped = 0
+        for row in logs_data:
+            mid = row.get("tech_message_id", "").strip()
+            if mid and mid in seen_ids:
+                skipped += 1
+                continue
+            text = self._preprocessor.preprocess(
+                row.get("tech_raw_text", ""),
+                row.get("solving", ""),
+            )
+            label = row.get("symtomps", "").strip()
+            if text and label:
+                norm = LABEL_MAPPING.get(label.lower(), label)
+                texts.append(text)
+                labels.append(norm)
+                if mid:
+                    seen_ids.add(mid)
+
+        if skipped:
+            _LOGGER.info("Dedup: dropped %d duplicate rows from Logs (already in ML_Tracking)", skipped)
 
         if len(texts) < 50 and not force:
             return {"success": False, "message": f"Only {len(texts)} samples, need 50+. Use force=true."}
