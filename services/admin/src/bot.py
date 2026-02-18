@@ -613,20 +613,20 @@ class AdminCommandHandler:
         try:
             r = await self._api_get(f"{self._prediction_url}/mlflow/status")
             versions = r.get("versions", [])
-            prod_ver = r.get("production_version")
+            prod_model = r.get("production_model", {})
+            prod_ver = prod_model.get("version") if isinstance(prod_model, dict) else None
 
-            msg = (
+            header = (
                 f"\U0001f4ca <b>MLflow Status</b>\n"
                 f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
                 f"\U0001f3e2 Tracking: <code>{r.get('tracking_uri', '?')}</code>\n"
                 f"\U0001f4e6 Model: <code>{r.get('model_name', '?')}</code>\n"
-                f"\U0001f7e2 Production: <b>v{prod_ver}</b>\n\n" if prod_ver else
-                f"\U0001f4ca <b>MLflow Status</b>\n"
-                f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
-                f"\U0001f3e2 Tracking: <code>{r.get('tracking_uri', '?')}</code>\n"
-                f"\U0001f4e6 Model: <code>{r.get('model_name', '?')}</code>\n"
-                f"\u26a0\ufe0f No Production version\n\n"
             )
+            if prod_ver:
+                header += f"\U0001f7e2 Production: <b>v{prod_ver}</b>\n\n"
+            else:
+                header += f"\u26a0\ufe0f No Production version\n\n"
+            msg = header
 
             if versions:
                 stage_emoji = {
@@ -640,7 +640,14 @@ class AdminCommandHandler:
                     emoji = stage_emoji.get(v.get("stage", "None"), "\u26ab")
                     ver = v.get("version", "?")
                     stage = v.get("stage", "None")
-                    created = v.get("created_at", "?")[:10] if v.get("created_at") else "?"
+                    raw_ts = v.get("created_at")
+                    if isinstance(raw_ts, (int, float)) and raw_ts > 1e12:
+                        from datetime import datetime, timezone
+                        created = datetime.fromtimestamp(raw_ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                    elif isinstance(raw_ts, str):
+                        created = raw_ts[:10]
+                    else:
+                        created = "?"
                     desc = v.get("description", "")
                     desc_text = f" - {desc[:30]}" if desc else ""
                     msg += f"  {emoji} v{ver} [{stage}] ({created}){desc_text}\n"
