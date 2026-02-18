@@ -53,8 +53,9 @@ class AdminCommandHandler:
         resp.raise_for_status()
         return resp.json()
 
-    async def _api_post(self, url: str, json: dict | None = None, timeout: float = 60.0) -> dict:
-        resp = await self._http.post(url, json=json, timeout=timeout)
+    async def _api_post(self, url: str, json: dict | None = None,
+                       params: dict | None = None, timeout: float = 60.0) -> dict:
+        resp = await self._http.post(url, json=json, params=params, timeout=timeout)
         resp.raise_for_status()
         return resp.json()
 
@@ -314,12 +315,17 @@ class AdminCommandHandler:
                 f"  🟡 MEDIUM REVIEW: {medium:,}\n"
             )
 
+            # Google Sheets review link
+            sheet_url = s.get("sheet_url", "")
+            if sheet_url:
+                msg += f"\n\U0001f4ce <a href=\"{sheet_url}\">Buka Google Sheets</a>\n"
+
             if pending == 0:
-                msg += "\n🎉 Semua prediksi sudah di-review!"
+                msg += "\n\U0001f389 Semua prediksi sudah di-review!"
             elif pending > 50:
-                msg += f"\n⚠️ <b>{pending}</b> prediksi perlu review — prioritaskan MANUAL!"
+                msg += f"\n\u26a0\ufe0f <b>{pending}</b> prediksi perlu review \u2014 prioritaskan MANUAL!"
             else:
-                msg += f"\n⚠️ Ada <b>{pending}</b> prediksi yang perlu review."
+                msg += f"\n\u26a0\ufe0f Ada <b>{pending}</b> prediksi yang perlu review."
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("pendingreview failed")

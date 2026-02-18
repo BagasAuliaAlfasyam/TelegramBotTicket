@@ -120,7 +120,7 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.90:
+                    if conf >= 0.80:
                         auto_count += 1
                     elif conf >= 0.70:
                         high_count += 1
@@ -144,6 +144,11 @@ class MLTrackingClient:
                     elif row[7] == "hybrid":
                         hybrid_count += 1
 
+            # Build sheet URL for review link
+            sheet_url = ""
+            if self._spreadsheet:
+                sheet_url = f"https://docs.google.com/spreadsheets/d/{self._spreadsheet.id}"
+
             return {
                 "total_predictions": total,
                 "avg_confidence": (conf_sum / total * 100) if total > 0 else 0.0,
@@ -151,6 +156,7 @@ class MLTrackingClient:
                 "medium_count": medium_count, "manual_count": manual_count,
                 "reviewed_count": reviewed_count, "pending_count": pending_count,
                 "gemini_count": gemini_count, "hybrid_count": hybrid_count,
+                "sheet_url": sheet_url,
             }
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed to get stats: %s", exc)
@@ -230,7 +236,7 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.90:
+                    if conf >= 0.80:
                         auto_c += 1
                     elif conf >= 0.70:
                         high_c += 1
@@ -259,11 +265,14 @@ class MLTrackingClient:
                 except Exception:
                     self._monitoring_sheet.append_row(row_data, value_input_option='RAW')
 
+            # Count actual manual predictions (below medium threshold)
+            below_medium = total - auto_c - high_c - medium_c
             return {
                 "datetime_hour": datetime_hour, "total_predictions": total,
                 "avg_confidence": avg_conf, "auto_count": auto_c,
                 "high_count": high_c, "medium_count": medium_c,
-                "manual_count": pending_c, "model_version": model_version,
+                "manual_count": below_medium, "pending_count": pending_c,
+                "reviewed_count": reviewed_c, "model_version": model_version,
             }
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed hourly stats: %s", exc)

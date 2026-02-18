@@ -132,7 +132,7 @@ class OpsCollector:
         else:
             self._reporting_bot = None
 
-        self._state = PersistentState(Path("state_cache.json"))
+        self._state = PersistentState(Path("/app/state/state_cache.json"))
         try:
             self._tz = ZoneInfo(config.timezone)
         except Exception:

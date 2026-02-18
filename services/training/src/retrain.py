@@ -95,9 +95,10 @@ class RetrainPipeline:
             self._last_result = result
             return result
         except Exception as e:
-            self._status = f"failed: {e}"
+            self._status = "failed"
+            self._last_result = {"success": False, "message": str(e)}
             _LOGGER.exception("Retrain failed")
-            return {"success": False, "message": str(e)}
+            return self._last_result
 
     def _execute(self, force: bool, tune: bool, tune_trials: int) -> dict:
         start = time.time()
