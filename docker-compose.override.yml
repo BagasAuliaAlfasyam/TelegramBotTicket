@@ -6,8 +6,7 @@
 #   export IMAGE_REGISTRY=asia-southeast2-docker.pkg.dev/mytech-480618/microservices/
 #   export IMAGE_TAG=abc1234
 #   docker compose -f docker-compose.yml \
-#                  -f docker-compose.override.yml \
-#                  --env-file .env.local up -d --no-build
+#                  -f docker-compose.override.yml up -d --no-build
 # ============================================================
 
 services:

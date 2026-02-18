@@ -70,14 +70,14 @@ TelegramBotMyTech/
 ### 1. Configure Environment
 
 ```bash
-cp .env.template .env.local
-# Edit .env.local with your values
+cp .env.template .env
+# Edit .env with your values
 ```
 
 ### 2. Run Locally (Dev)
 
 ```bash
-docker compose --env-file .env.local up -d --build
+docker compose up -d --build
 ```
 
 ### 3. Run with Pre-built Images (Prod)
@@ -86,7 +86,7 @@ docker compose --env-file .env.local up -d --build
 export IMAGE_REGISTRY=asia-southeast2-docker.pkg.dev/mytech-480618/microservices/
 export IMAGE_TAG=latest
 docker compose -f docker-compose.yml -f docker-compose.override.yml \
-  --env-file .env.local up -d --no-build
+  up -d --no-build
 ```
 
 ## ML Classification
@@ -162,10 +162,9 @@ GitHub Push → Cloud Build → Lint → Validate → Build → Push → Deploy 
 # On VM — deploy previous version
 export IMAGE_TAG=<previous-commit-sha>
 export IMAGE_REGISTRY=asia-southeast2-docker.pkg.dev/mytech-480618/microservices/
+docker compose -f docker-compose.yml -f docker-compose.override.yml pull
 docker compose -f docker-compose.yml -f docker-compose.override.yml \
-  --env-file .env.local pull
-docker compose -f docker-compose.yml -f docker-compose.override.yml \
-  --env-file .env.local up -d --no-build
+  up -d --no-build
 ```
 
 ## CI/CD Setup (One-time)

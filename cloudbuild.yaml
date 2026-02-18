@@ -221,7 +221,6 @@ steps:
             docker compose \
               -f docker-compose.yml \
               -f docker-compose.override.yml \
-              --env-file .env.local \
               pull prediction-api training-api data-api collector-bot admin-bot
 
             # Deploy (only recreates changed services)
@@ -229,7 +228,6 @@ steps:
             docker compose \
               -f docker-compose.yml \
               -f docker-compose.override.yml \
-              --env-file .env.local \
               up -d --no-build
 
             # Wait for services to be ready

@@ -57,7 +57,6 @@ if [[ "$MODE" == "local" ]]; then
   echo ">>> Building & deploying locally..."
   docker compose \
     -f docker-compose.yml \
-    --env-file .env.local \
     up -d --build
 
 else
@@ -72,7 +71,6 @@ else
   docker compose \
     -f docker-compose.yml \
     -f docker-compose.override.yml \
-    --env-file .env.local \
     pull prediction-api training-api data-api collector-bot admin-bot
 
   echo ""
@@ -80,7 +78,6 @@ else
   docker compose \
     -f docker-compose.yml \
     -f docker-compose.override.yml \
-    --env-file .env.local \
     up -d --no-build
 fi
 
