@@ -184,9 +184,9 @@ class HybridClassifier:
             "classes": self._lgbm.classes,
             "thresholds": {
                 "AUTO": self._threshold_auto,
-                "REVIEW": "< " + str(self._threshold_auto),
+                "REVIEW": 0.0,
+                "cascade": self._cascade_threshold,
             },
-            "cascade_threshold": self._cascade_threshold,
             "gemini_enabled": self._gemini is not None and self._gemini.is_ready,
             "training_samples": self._lgbm.metadata.get("n_samples"),
             "training_accuracy": self._lgbm.metadata.get("f1_macro"),

@@ -76,6 +76,8 @@ class ModelInfoResponse(BaseModel):
     training_accuracy: float | None = None
     trained_at: str | None = None
 
+    model_config = {"extra": "ignore"}
+
 
 class ModelReloadRequest(BaseModel):
     """Request body for /model/reload endpoint."""
