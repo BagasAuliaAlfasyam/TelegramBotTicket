@@ -45,10 +45,11 @@ class MLTrackingClient:
             self._monitoring_sheet = self._get_or_create_sheet(
                 MONITORING_SHEET,
                 ["datetime_hour", "total_predictions", "avg_confidence",
-                 "auto_count", "high_count", "medium_count", "manual_count",
+                 "auto_count", "review_count", "pending_count",
                  "reviewed_count", "accuracy", "model_version"]
             )
-        except Exception:
+        except Exception as e:
+            _LOGGER.warning("Failed to connect monitoring sheet: %s", e)
             self._monitoring_sheet = None
 
     def _get_or_create_sheet(self, name: str, headers: list[str]) -> gspread.Worksheet:
@@ -120,18 +121,20 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.75:
-                        auto_count += 1
-                    else:
-                        review_count += 1
                 except ValueError:
-                    review_count += 1
+                    pass
 
                 status = row[5]
-                if status in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
+                if status == "auto_approved":
+                    auto_count += 1
+                elif status in ("APPROVED", "CORRECTED", "TRAINED"):
                     reviewed_count += 1
+                    auto_count += 1  # corrected/approved were originally auto or reviewed
                 elif status == "pending":
                     pending_count += 1
+                    review_count += 1  # pending = needs review
+                else:
+                    review_count += 1  # unknown status = review
 
                 # Track prediction source (column 7 if exists)
                 if len(row) > 7 and row[7]:
@@ -176,22 +179,27 @@ class MLTrackingClient:
 
             total = 0
             conf_sum = 0.0
-            auto_c = high_c = medium_c = manual_c = reviewed_c = 0
+            auto_c = review_c = reviewed_c = 0
 
             for row in recent:
-                if len(row) >= 10 and row[1]:
+                # Support both new 9-column and legacy 10-column layout
+                ncols = len(row)
+                if ncols >= 9 and row[1]:
                     day_total = int(row[1]) if row[1] else 0
                     total += day_total
                     if row[2] and day_total > 0:
                         conf_sum += float(row[2]) * day_total
                     auto_c += int(row[3]) if row[3] else 0
-                    # Legacy columns 4+5+6 = review_count (was high+medium+manual)
-                    high_c += int(row[4]) if row[4] else 0
-                    medium_c += int(row[5]) if row[5] else 0
-                    manual_c += int(row[6]) if row[6] else 0
-                    reviewed_c += int(row[7]) if row[7] else 0
+                    if ncols == 9:
+                        # New 2-tier: [dt, total, conf, auto, review, pending, reviewed, acc, model]
+                        review_c += int(row[4]) if row[4] else 0
+                        reviewed_c += int(row[6]) if row[6] else 0
+                    else:
+                        # Legacy 10-col: [dt, total, conf, auto, high, medium, manual, reviewed, acc, model]
+                        # high+medium = review, manual = pending (don't count as review)
+                        review_c += (int(row[4]) if row[4] else 0) + (int(row[5]) if row[5] else 0)
+                        reviewed_c += int(row[7]) if row[7] else 0
 
-            review_c = high_c + medium_c + manual_c
             return {
                 "days": days, "total_predictions": total,
                 "avg_confidence": (conf_sum / total) if total > 0 else 0.0,
@@ -232,17 +240,21 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.75:
-                        auto_c += 1
-                    else:
-                        review_c += 1
                 except ValueError:
-                    review_c += 1
+                    pass
 
-                if row[5] == "pending":
-                    pending_c += 1
-                elif row[5] in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
+                # Use review_status column (col 5) to classify
+                status = row[5]
+                if status == "auto_approved":
+                    auto_c += 1
+                elif status in ("APPROVED", "CORRECTED", "TRAINED"):
                     reviewed_c += 1
+                    auto_c += 1
+                elif status == "pending":
+                    pending_c += 1
+                    review_c += 1
+                else:
+                    review_c += 1
 
             if total == 0:
                 return {}
@@ -250,19 +262,19 @@ class MLTrackingClient:
             avg_conf = conf_sum / total
 
             if self._monitoring_sheet:
-                # Keep sheet columns compatible: [auto, review, 0, pending, reviewed, ...]
+                # 2-tier columns: [datetime, total, avg_conf, auto, review, pending, reviewed, accuracy, model]
                 row_data = [datetime_hour, total, round(avg_conf * 100, 2),
-                           auto_c, review_c, 0, pending_c,
+                           auto_c, review_c, pending_c,
                            reviewed_c, round(reviewed_c / total * 100, 2), model_version]
                 try:
                     cell = self._monitoring_sheet.find(datetime_hour, in_column=1)
-                    self._monitoring_sheet.update(f'A{cell.row}:J{cell.row}', [row_data], value_input_option='RAW')
+                    self._monitoring_sheet.update(f'A{cell.row}:I{cell.row}', [row_data], value_input_option='RAW')
                 except Exception:
                     self._monitoring_sheet.append_row(row_data, value_input_option='RAW')
 
             return {
                 "datetime_hour": datetime_hour, "total_predictions": total,
-                "avg_confidence": avg_conf, "auto_count": auto_c,
+                "avg_confidence": round(avg_conf * 100, 2), "auto_count": auto_c,
                 "review_count": review_c, "pending_count": pending_c,
                 "reviewed_count": reviewed_c, "model_version": model_version,
             }

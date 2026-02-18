@@ -61,7 +61,7 @@ async def lifespan(application: FastAPI):
 
     if not classifier.load_model():
         _LOGGER.error("Failed to load model from MLflow!")
-        # Don't crash — service starts but returns MANUAL for all requests
+        # Don't crash — service starts but returns REVIEW for all requests
     else:
         _LOGGER.info("Model loaded successfully: %s", classifier._lgbm.model_version)
     yield

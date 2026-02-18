@@ -24,6 +24,7 @@ from services.shared.models import HealthResponse
 from services.training.src.retrain import RetrainPipeline
 
 _LOGGER = logging.getLogger(__name__)
+_train_lock = threading.Lock()
 
 config = TrainingServiceConfig.from_env()
 setup_logging(config.debug, "training-api")
@@ -61,7 +62,7 @@ async def train(body: dict = {}):
     if not pipeline:
         raise HTTPException(503, "Pipeline not initialized")
 
-    if pipeline.status == "running":
+    if not _train_lock.acquire(blocking=False):
         return {"success": False, "message": "Training already in progress", "status": "running"}
 
     force = body.get("force", False)
@@ -70,7 +71,10 @@ async def train(body: dict = {}):
 
     # Run in background thread to not block the API
     def _run():
-        pipeline.run(force=force, tune=tune, tune_trials=tune_trials)
+        try:
+            pipeline.run(force=force, tune=tune, tune_trials=tune_trials)
+        finally:
+            _train_lock.release()
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()

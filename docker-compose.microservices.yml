@@ -56,11 +56,9 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_ENABLED: ${GEMINI_ENABLED:-true}
       GEMINI_MODEL_NAME: ${GEMINI_MODEL_NAME:-gemini-2.0-flash}
-      GEMINI_CASCADE_THRESHOLD: ${GEMINI_CASCADE_THRESHOLD:-0.80}
-      # ML Thresholds
-      ML_THRESHOLD_AUTO: ${ML_THRESHOLD_AUTO:-0.80}
-      ML_THRESHOLD_HIGH: ${ML_THRESHOLD_HIGH:-0.70}
-      ML_THRESHOLD_MEDIUM: ${ML_THRESHOLD_MEDIUM:-0.50}
+      GEMINI_CASCADE_THRESHOLD: ${GEMINI_CASCADE_THRESHOLD:-0.75}
+      # ML Thresholds (2-tier: AUTO >= 0.75, REVIEW < 0.75)
+      ML_THRESHOLD_AUTO: ${ML_THRESHOLD_AUTO:-0.75}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s

@@ -158,7 +158,7 @@ class CollectorBotConfig:
 
         return cls(
             telegram_collecting_bot_token=os.getenv("TELEGRAM_BOT_TOKEN_COLLECTING", ""),
-            telegram_admin_chat_id=int(os.getenv("TARGET_GROUP_REPORTING", "0") or "0"),
+            telegram_admin_chat_id=int(os.getenv("TELEGRAM_ADMIN_CHAT_ID", "") or os.getenv("TARGET_GROUP_REPORTING", "0") or "0"),
             admin_user_ids=admin_ids,
             telegram_reporting_bot_token=os.getenv("TELEGRAM_BOT_TOKEN_REPORTING", ""),
             prediction_api_url=os.getenv("PREDICTION_API_URL", "http://prediction-api:8001"),

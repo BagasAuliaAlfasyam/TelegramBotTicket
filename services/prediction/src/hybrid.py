@@ -190,8 +190,8 @@ class HybridClassifier:
             },
             "cascade_threshold": self._cascade_threshold,
             "gemini_enabled": self._gemini is not None and self._gemini.is_ready,
-            "training_samples": self._lgbm.metadata.get("training_samples"),
-            "training_accuracy": self._lgbm.metadata.get("training_accuracy"),
+            "training_samples": self._lgbm.metadata.get("n_samples"),
+            "training_accuracy": self._lgbm.metadata.get("f1_macro"),
             "trained_at": self._lgbm.metadata.get("trained_at"),
         }
 

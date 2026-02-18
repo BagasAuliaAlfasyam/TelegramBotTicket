@@ -596,7 +596,7 @@ class AdminCommandHandler:
                     f"\U0001f4cb Review: <b>{review:,}</b>\n"
                     f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
                     f"\u23f3 Pending: <b>{pending:,}</b>\n"
-                    f"\U0001f3af Avg Confidence: <b>{conf:.1%}</b>\n\n"
+                    f"\U0001f3af Avg Confidence: <b>{conf:.1f}%</b>\n\n"
                     f"\U0001f4dd Ditulis ke sheet Monitoring.",
                 )
             else:
@@ -1269,7 +1269,7 @@ class TrendAlertService:
     # Thresholds
     AUTO_RATE_MIN = 0.70        # Alert if automation rate drops below 70%
     REVIEW_RATE_MAX = 0.30      # Alert if review rate exceeds 30%
-    CONFIDENCE_MIN = 0.80       # Alert if avg confidence drops below 80%
+    CONFIDENCE_MIN = 80.0        # Alert if avg confidence drops below 80%
     PENDING_MAX = 50            # Alert if pending queue exceeds 50
 
     def __init__(
@@ -1364,7 +1364,7 @@ class TrendAlertService:
         if confidence < self.CONFIDENCE_MIN:
             alerts.append(
                 f"\u26a0\ufe0f <b>Confidence Rendah!</b>\n"
-                f"  Avg: {confidence:.1%} (threshold: {self.CONFIDENCE_MIN:.0%})"
+                f"  Avg: {confidence:.1f}% (threshold: {self.CONFIDENCE_MIN:.0f}%)"
             )
 
         if pending > self.PENDING_MAX:
