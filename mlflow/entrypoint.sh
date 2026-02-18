@@ -20,11 +20,14 @@ MLFLOW_PORT=${MLFLOW_PORT:-5000}
 MLFLOW_HOST=${MLFLOW_HOST:-0.0.0.0}
 MLFLOW_WORKERS=${MLFLOW_WORKERS:-1}
 
-# Artifact root in MinIO
-ARTIFACT_ROOT="s3://${MLFLOW_BUCKET_NAME}/mlflow-artifacts"
+# Ensure directories exist (volume mount replaces Dockerfile dirs)
+mkdir -p /mlflow/db
 
-# Backend store (SQLite in local, synced to MinIO periodically)
-BACKEND_STORE="/mlflow/db/mlruns.db"
+# Artifact root in MinIO
+ARTIFACT_ROOT="s3://${MLFLOW_BUCKET_NAME}"
+
+# Backend store (SQLite, compatible with previous stock image path)
+BACKEND_STORE="/mlflow/mlflow.db"
 
 echo "Configuration:"
 echo "  - S3 Endpoint: ${MLFLOW_S3_ENDPOINT_URL}"
@@ -35,7 +38,7 @@ echo "  - Workers: ${MLFLOW_WORKERS}"
 
 # Download existing SQLite DB from MinIO if exists
 echo "Checking for existing database in MinIO..."
-if aws s3 cp "s3://${MLFLOW_BUCKET_NAME}/mlruns.db" "${BACKEND_STORE}" \
+if aws s3 cp "s3://${MLFLOW_BUCKET_NAME}/mlflow.db" "${BACKEND_STORE}" \
     --endpoint-url "${MLFLOW_S3_ENDPOINT_URL}" 2>/dev/null; then
     echo "  - Downloaded existing database from MinIO"
 else
@@ -48,7 +51,7 @@ backup_db() {
     while true; do
         sleep 300  # Backup every 5 minutes
         echo "Backing up database to MinIO..."
-        aws s3 cp "${BACKEND_STORE}" "s3://${MLFLOW_BUCKET_NAME}/mlruns.db" \
+        aws s3 cp "${BACKEND_STORE}" "s3://${MLFLOW_BUCKET_NAME}/mlflow.db" \
             --endpoint-url "${MLFLOW_S3_ENDPOINT_URL}" 2>/dev/null || true
     done
 }
@@ -61,7 +64,7 @@ BACKUP_PID=$!
 cleanup() {
     echo "Shutting down..."
     # Final backup before exit
-    aws s3 cp "${BACKEND_STORE}" "s3://${MLFLOW_BUCKET_NAME}/mlruns.db" \
+    aws s3 cp "${BACKEND_STORE}" "s3://${MLFLOW_BUCKET_NAME}/mlflow.db" \
         --endpoint-url "${MLFLOW_S3_ENDPOINT_URL}" 2>/dev/null || true
     kill $BACKUP_PID 2>/dev/null || true
     nginx -s quit 2>/dev/null || true
