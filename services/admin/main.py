@@ -25,30 +25,35 @@ def build_application(config: AdminBotConfig) -> Application:
 
     app = ApplicationBuilder().token(config.telegram_reporting_bot_token).build()
 
+    # -- Statistik & Monitoring --
     app.add_handler(CommandHandler("stats", handler.stats))
     app.add_handler(CommandHandler("report", handler.report))
     app.add_handler(CommandHandler("modelstatus", handler.model_status))
     app.add_handler(CommandHandler("pendingreview", handler.pending_review))
-    app.add_handler(CommandHandler("updatestats", handler.update_stats))
-    app.add_handler(CommandHandler("retrainstatus", handler.retrain_status))
+
+    # -- Model Management --
     app.add_handler(CommandHandler("retrain", handler.retrain))
+    app.add_handler(CommandHandler("retrainstatus", handler.retrain_status))
     app.add_handler(CommandHandler("reloadmodel", handler.reload_model))
+
+    # -- Laporan --
     app.add_handler(CommandHandler("tiketreport", handler.tiket_report))
-    app.add_handler(CommandHandler("trendbulan", handler.trend_bulan))
-    app.add_handler(CommandHandler("trendmingguan", handler.trend_mingguan))
-    app.add_handler(CommandHandler("helpml", handler.help_admin))
+
+    # -- Help --
     app.add_handler(CommandHandler("help", handler.help_admin))
+    app.add_handler(CommandHandler("start", handler.help_admin))
 
     async def post_init(application: Application) -> None:
         commands = [
-            BotCommand("help", "Tampilkan bantuan"),
-            BotCommand("stats", "Statistik ML"),
-            BotCommand("report", "Laporan performa"),
-            BotCommand("modelstatus", "Status model + Gemini"),
-            BotCommand("retrain", "Retrain model"),
-            BotCommand("reloadmodel", "Reload model terbaru"),
-            BotCommand("tiketreport", "Laporan tiket & SLA"),
-            BotCommand("trendbulan", "Trend bulanan"),
+            BotCommand("help", "📖 Tampilkan bantuan"),
+            BotCommand("stats", "📊 Dashboard ML real-time"),
+            BotCommand("report", "📈 Laporan mingguan/bulanan"),
+            BotCommand("modelstatus", "🤖 Status model & Gemini"),
+            BotCommand("pendingreview", "📋 Tiket perlu review"),
+            BotCommand("retrain", "🔧 Training ulang model"),
+            BotCommand("retrainstatus", "🔄 Cek progress training"),
+            BotCommand("reloadmodel", "🔃 Load model terbaru"),
+            BotCommand("tiketreport", "📋 Laporan tiket & SLA"),
         ]
         await application.bot.set_my_commands(commands)
 
