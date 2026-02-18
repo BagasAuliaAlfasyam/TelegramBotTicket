@@ -393,17 +393,24 @@ class AdminCommandHandler:
                 return
 
             headers = all_rows[0]
+            # Normalize headers (strip whitespace)
+            headers = [h.strip() for h in headers]
 
-            # Find columns
-            def _col(name: str) -> int:
-                return headers.index(name) if name in headers else -1
+            # Find columns — flexible matching
+            def _col(*names: str) -> int:
+                for n in names:
+                    nl = n.lower()
+                    for i, h in enumerate(headers):
+                        if h.lower() == nl:
+                            return i
+                return -1
 
-            date_col = _col("Ticket Date")
+            date_col = _col("Ticket Date", "Column 1")
             sla_time_col = _col("SLA Response Time")
             sla_status_col = _col("SLA Status")
             symtomps_col = _col("Symtomps")
             app_col = _col("App")
-            solver_col = _col("Solver")
+            solver_col = _col("Solver Name", "Solver")
 
             if date_col == -1:
                 await self._reply(update, "❌ Kolom 'Ticket Date' tidak ditemukan.")
@@ -491,10 +498,10 @@ class AdminCommandHandler:
 
                 total_tickets += 1
 
-                # SLA Time
+                # SLA Time (handle comma decimal separator e.g. "0,57")
                 if sla_time_col != -1 and len(row) > sla_time_col and row[sla_time_col]:
                     try:
-                        t = float(row[sla_time_col])
+                        t = float(row[sla_time_col].replace(",", "."))
                         if t > 0:
                             sla_times.append(t)
                     except ValueError:
