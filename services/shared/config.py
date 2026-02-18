@@ -118,7 +118,7 @@ class DataServiceConfig:
             s3_region=os.getenv("AWS_S3_REGION", "us-east-1"),
             s3_endpoint_url=os.getenv("AWS_S3_ENDPOINT", ""),
             s3_public_url=os.getenv("AWS_S3_PUBLIC_BASE_URL", ""),
-            s3_media_prefix=os.getenv("AWS_S3_MEDIA_PREFIX", "tech-media"),
+            s3_media_prefix=os.getenv("S3_MEDIA_PREFIX") or os.getenv("AWS_S3_MEDIA_PREFIX", "tech-media"),
             host=os.getenv("SERVICE_HOST", "0.0.0.0"),
             port=int(os.getenv("SERVICE_PORT", "8002")),
             timezone=os.getenv("TIMEZONE", "Asia/Jakarta"),
