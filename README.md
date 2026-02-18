@@ -88,9 +88,8 @@ S3_REGION=ap-southeast-1
 
 # ML Settings
 MODEL_VERSION=auto  # auto = read from current_version.txt
-ML_THRESHOLD_AUTO=0.90
-ML_THRESHOLD_HIGH=0.85
-ML_THRESHOLD_MEDIUM=0.70
+ML_THRESHOLD_AUTO=0.75
+GEMINI_CASCADE_THRESHOLD=0.75
 
 # Optional
 ADMIN_USER_IDS=123456789,987654321
@@ -157,21 +156,21 @@ Lihat section "Retraining Model" di bawah.
 | `/report weekly` | Weekly performance report |
 | `/report monthly` | Monthly performance report |
 | `/modelstatus` | Current model information |
-| `/pendingreview` | Items pending manual review |
+| `/pendingreview` | Items pending review |
 | `/retrainstatus` | Check retrain readiness |
 | `/retrain` | **🔥 Retrain + auto-reload (all in Telegram!)** |
 | `/retrain force` | Force retrain tanpa check threshold |
 | `/reloadmodel [v3]` | Hot reload model manual |
 | `/helpml` | Show help message |
 
-## ML Classification Thresholds
+## ML Classification Thresholds (2-Tier)
+
+Sistem menggunakan **2-tier** sederhana karena Gemini cascade sudah menangani grey zone:
 
 | Status | Confidence | Action |
 |--------|------------|--------|
-| AUTO | ≥90% | Auto-applied, trusted |
-| HIGH_REVIEW | 85-90% | High confidence, review recommended |
-| MEDIUM_REVIEW | 70-85% | Medium confidence, review needed |
-| MANUAL | <70% | Manual classification required |
+| AUTO | ≥75% | Auto-applied (LightGBM + Gemini cascade) |
+| REVIEW | <75% | Perlu review manual |
 
 ## Retraining Model
 

@@ -16,9 +16,7 @@ from pydantic import BaseModel, Field
 
 class PredictionStatus(StrEnum):
     AUTO = "AUTO"
-    HIGH_REVIEW = "HIGH_REVIEW"
-    MEDIUM_REVIEW = "MEDIUM_REVIEW"
-    MANUAL = "MANUAL"
+    REVIEW = "REVIEW"
 
 
 class PredictionSource(StrEnum):
@@ -140,9 +138,7 @@ class StatsResponse(BaseModel):
     total_predictions: int = 0
     avg_confidence: float = 0.0
     auto_count: int = 0
-    high_count: int = 0
-    medium_count: int = 0
-    manual_count: int = 0
+    review_count: int = 0
     reviewed_count: int = 0
     pending_count: int = 0
 

@@ -110,7 +110,7 @@ class MLTrackingClient:
 
             total = len(all_data) - 1
             conf_sum = 0.0
-            auto_count = high_count = medium_count = manual_count = 0
+            auto_count = review_count = 0
             reviewed_count = pending_count = 0
             gemini_count = hybrid_count = 0
 
@@ -120,16 +120,12 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.80:
+                    if conf >= 0.75:
                         auto_count += 1
-                    elif conf >= 0.70:
-                        high_count += 1
-                    elif conf >= 0.50:
-                        medium_count += 1
                     else:
-                        manual_count += 1
+                        review_count += 1
                 except ValueError:
-                    manual_count += 1
+                    review_count += 1
 
                 status = row[5]
                 if status in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
@@ -152,8 +148,7 @@ class MLTrackingClient:
             return {
                 "total_predictions": total,
                 "avg_confidence": (conf_sum / total * 100) if total > 0 else 0.0,
-                "auto_count": auto_count, "high_count": high_count,
-                "medium_count": medium_count, "manual_count": manual_count,
+                "auto_count": auto_count, "review_count": review_count,
                 "reviewed_count": reviewed_count, "pending_count": pending_count,
                 "gemini_count": gemini_count, "hybrid_count": hybrid_count,
                 "sheet_url": sheet_url,
@@ -190,16 +185,17 @@ class MLTrackingClient:
                     if row[2] and day_total > 0:
                         conf_sum += float(row[2]) * day_total
                     auto_c += int(row[3]) if row[3] else 0
+                    # Legacy columns 4+5+6 = review_count (was high+medium+manual)
                     high_c += int(row[4]) if row[4] else 0
                     medium_c += int(row[5]) if row[5] else 0
                     manual_c += int(row[6]) if row[6] else 0
                     reviewed_c += int(row[7]) if row[7] else 0
 
+            review_c = high_c + medium_c + manual_c
             return {
                 "days": days, "total_predictions": total,
                 "avg_confidence": (conf_sum / total) if total > 0 else 0.0,
-                "auto_count": auto_c, "high_review_count": high_c,
-                "medium_review_count": medium_c, "manual_count": manual_c,
+                "auto_count": auto_c, "review_count": review_c,
                 "reviewed_count": reviewed_c,
             }
         except (GSpreadException, APIError) as exc:
@@ -223,7 +219,7 @@ class MLTrackingClient:
 
             total = 0
             conf_sum = 0.0
-            auto_c = high_c = medium_c = pending_c = reviewed_c = 0
+            auto_c = review_c = pending_c = reviewed_c = 0
 
             for row in all_data[1:]:
                 if len(row) < 7:
@@ -236,14 +232,12 @@ class MLTrackingClient:
                 try:
                     conf = float(row[4].replace(",", ".")) if row[4] else 0.0
                     conf_sum += conf
-                    if conf >= 0.80:
+                    if conf >= 0.75:
                         auto_c += 1
-                    elif conf >= 0.70:
-                        high_c += 1
-                    elif conf >= 0.50:
-                        medium_c += 1
+                    else:
+                        review_c += 1
                 except ValueError:
-                    pass
+                    review_c += 1
 
                 if row[5] == "pending":
                     pending_c += 1
@@ -256,8 +250,9 @@ class MLTrackingClient:
             avg_conf = conf_sum / total
 
             if self._monitoring_sheet:
+                # Keep sheet columns compatible: [auto, review, 0, pending, reviewed, ...]
                 row_data = [datetime_hour, total, round(avg_conf * 100, 2),
-                           auto_c, high_c, medium_c, pending_c,
+                           auto_c, review_c, 0, pending_c,
                            reviewed_c, round(reviewed_c / total * 100, 2), model_version]
                 try:
                     cell = self._monitoring_sheet.find(datetime_hour, in_column=1)
@@ -265,13 +260,10 @@ class MLTrackingClient:
                 except Exception:
                     self._monitoring_sheet.append_row(row_data, value_input_option='RAW')
 
-            # Count actual manual predictions (below medium threshold)
-            below_medium = total - auto_c - high_c - medium_c
             return {
                 "datetime_hour": datetime_hour, "total_predictions": total,
                 "avg_confidence": avg_conf, "auto_count": auto_c,
-                "high_count": high_c, "medium_count": medium_c,
-                "manual_count": below_medium, "pending_count": pending_c,
+                "review_count": review_c, "pending_count": pending_c,
                 "reviewed_count": reviewed_c, "model_version": model_version,
             }
         except (GSpreadException, APIError) as exc:

@@ -66,10 +66,8 @@ class HybridClassifier:
                 timeout=config.gemini_timeout,
             )
 
-        # Thresholds
+        # Threshold (2-tier)
         self._threshold_auto = config.threshold_auto
-        self._threshold_high = config.threshold_high
-        self._threshold_medium = config.threshold_medium
 
     def load_model(self, stage: str = "Production") -> bool:
         """Load LightGBM model and sync labels to Gemini."""
@@ -173,12 +171,7 @@ class HybridClassifier:
     def _get_status(self, confidence: float) -> PredictionStatus:
         if confidence >= self._threshold_auto:
             return PredictionStatus.AUTO
-        elif confidence >= self._threshold_high:
-            return PredictionStatus.HIGH_REVIEW
-        elif confidence >= self._threshold_medium:
-            return PredictionStatus.MEDIUM_REVIEW
-        else:
-            return PredictionStatus.MANUAL
+        return PredictionStatus.REVIEW
 
     @property
     def is_loaded(self) -> bool:
@@ -193,8 +186,7 @@ class HybridClassifier:
             "classes": self._lgbm.classes,
             "thresholds": {
                 "AUTO": self._threshold_auto,
-                "HIGH_REVIEW": self._threshold_high,
-                "MEDIUM_REVIEW": self._threshold_medium,
+                "REVIEW": "< " + str(self._threshold_auto),
             },
             "cascade_threshold": self._cascade_threshold,
             "gemini_enabled": self._gemini is not None and self._gemini.is_ready,

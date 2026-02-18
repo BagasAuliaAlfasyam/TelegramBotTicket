@@ -228,7 +228,7 @@ class OpsCollector:
             ml_source = "lightgbm"
             ml_confidence = 0.0
             ml_predicted = ""
-            ml_status = "MANUAL"
+            ml_status = "REVIEW"
 
             try:
                 resp = await self._http.post(
@@ -241,8 +241,8 @@ class OpsCollector:
                     ml_predicted = pred.get("predicted_symtomps", "")
                     ml_confidence = pred.get("ml_confidence", 0.0)
                     ml_source = pred.get("source", "lightgbm")
-                    ml_status = pred.get("prediction_status", "MANUAL")
-                    if ml_confidence >= 0.80:
+                    ml_status = pred.get("prediction_status", "REVIEW")
+                    if ml_confidence >= 0.75:
                         symtomps_label = ml_predicted
             except Exception:
                 _LOGGER.warning("Prediction API unavailable, continuing without ML")
@@ -258,7 +258,7 @@ class OpsCollector:
 
             if ml_predicted:
                 pct = ml_confidence * 100
-                if ml_confidence >= 0.80:
+                if ml_confidence >= 0.75:
                     notify_text += f"\n\n🤖 Symtomps: <b>{ml_predicted}</b> ({pct:.0f}%)"
                     if ml_source in ("gemini", "hybrid"):
                         notify_text += f" [{ml_source}]"

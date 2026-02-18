@@ -67,9 +67,9 @@ class AdminCommandHandler:
         if total == 0:
             return ""
         auto = stats.get("auto_count", 0)
-        manual = stats.get("manual_count", 0)
+        review = stats.get("review_count", 0)
         auto_rate = auto / total * 100
-        manual_rate = manual / total * 100
+        review_rate = review / total * 100
         avg_conf = stats.get("avg_confidence", 0)
 
         if auto_rate >= 90:
@@ -84,8 +84,8 @@ class AdminCommandHandler:
         elif avg_conf < 80:
             insights.append("\u26a0\ufe0f Avg confidence dropping — monitor closely")
 
-        if manual_rate > 20:
-            insights.append("\U0001f534 High manual classification rate")
+        if review_rate > 30:
+            insights.append("\U0001f534 High review rate — model may need retraining")
 
         pending = stats.get("pending_count", 0)
         if pending > 50:
@@ -138,9 +138,7 @@ class AdminCommandHandler:
                 return
 
             auto = s.get("auto_count", 0)
-            high = s.get("high_count", 0)
-            medium = s.get("medium_count", 0)
-            manual = s.get("manual_count", 0)
+            review = s.get("review_count", 0)
             auto_pct = auto / total * 100 if total else 0
 
             # Model version
@@ -158,10 +156,8 @@ class AdminCommandHandler:
                 f"🎯 Rata-rata Confidence: <b>{s.get('avg_confidence', 0):.1f}%</b>\n"
                 f"⚡ Automation Rate: <b>{auto_pct:.1f}%</b>\n\n"
                 f"<b>Distribusi Prediksi:</b>\n"
-                f"  ✅ AUTO (≥80%): {auto:,}\n"
-                f"  🔶 HIGH (70-80%): {high:,}\n"
-                f"  🟡 MEDIUM (50-70%): {medium:,}\n"
-                f"  🔴 MANUAL (&lt;50%): {manual:,}\n\n"
+                f"  ✅ AUTO (≥75%): {auto:,}\n"
+                f"  📋 REVIEW (&lt;75%): {review:,}\n\n"
                 f"<b>Review Status:</b>\n"
                 f"  📋 Pending: {s.get('pending_count', 0):,}\n"
                 f"  ✅ Reviewed: {s.get('reviewed_count', 0):,}\n"
@@ -209,9 +205,7 @@ class AdminCommandHandler:
                 f"🎯 Avg Confidence: <b>{s.get('avg_confidence', 0):.1f}%</b>\n"
                 f"⚡ Automation Rate: <b>{auto_pct:.1f}%</b>\n\n"
                 f"  ✅ AUTO: {auto:,}\n"
-                f"  🔶 HIGH: {s.get('high_review_count', 0):,}\n"
-                f"  🟡 MEDIUM: {s.get('medium_review_count', 0):,}\n"
-                f"  🔴 MANUAL: {s.get('manual_count', 0):,}\n"
+                f"  � REVIEW: {s.get('review_count', 0):,}\n"
                 f"  📝 Reviewed: {s.get('reviewed_count', 0):,}\n"
             )
 
@@ -264,11 +258,9 @@ class AdminCommandHandler:
                 msg += f"📋 Training Samples: <b>{samples:,}</b>\n"
 
             msg += (
-                f"\n<b>Thresholds:</b>\n"
-                f"  ✅ AUTO ≥ {float(thresholds.get('AUTO', 0.80))*100:.0f}%\n"
-                f"  🔶 HIGH ≥ {float(thresholds.get('HIGH_REVIEW', 0.70))*100:.0f}%\n"
-                f"  🟡 MEDIUM ≥ {float(thresholds.get('MEDIUM_REVIEW', 0.50))*100:.0f}%\n"
-                f"  🔴 MANUAL &lt; {float(thresholds.get('MEDIUM_REVIEW', 0.50))*100:.0f}%\n"
+                f"\n<b>Thresholds (2-tier):</b>\n"
+                f"  ✅ AUTO ≥ {float(thresholds.get('AUTO', 0.75))*100:.0f}%\n"
+                f"  📋 REVIEW &lt; {float(thresholds.get('AUTO', 0.75))*100:.0f}%\n"
             )
 
             # MLflow info
@@ -296,36 +288,30 @@ class AdminCommandHandler:
             s = await self._api_get(f"{self._data_url}/stats/realtime")
             pending = s.get("pending_count", 0)
             reviewed = s.get("reviewed_count", 0)
-            total = pending + reviewed
-
-            # Priority breakdown from confidence distribution
-            manual = s.get("manual_count", 0)
-            high = s.get("high_count", 0)
-            medium = s.get("medium_count", 0)
+            total = s.get("total_predictions", 0)
+            review = s.get("review_count", 0)
+            review_pct = review / total * 100 if total else 0
 
             msg = (
                 f"📋 <b>Review Status</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n\n"
                 f"⏳ Pending: <b>{pending:,}</b>\n"
                 f"✅ Reviewed: <b>{reviewed:,}</b>\n"
-                f"📊 Total: {total:,}\n\n"
-                f"<b>Priority Breakdown:</b>\n"
-                f"  🔴 MANUAL (Critical): {manual:,}\n"
-                f"  🔶 HIGH REVIEW: {high:,}\n"
-                f"  🟡 MEDIUM REVIEW: {medium:,}\n"
+                f"📋 Perlu Review: <b>{review:,}</b> ({review_pct:.1f}%)\n"
+                f"📊 Total Prediksi: {total:,}\n"
             )
 
             # Google Sheets review link
             sheet_url = s.get("sheet_url", "")
             if sheet_url:
-                msg += f"\n\U0001f4ce <a href=\"{sheet_url}\">Buka Google Sheets</a>\n"
+                msg += f"\n📎 <a href=\"{sheet_url}\">Buka Google Sheets</a>\n"
 
             if pending == 0:
-                msg += "\n\U0001f389 Semua prediksi sudah di-review!"
+                msg += "\n🎉 Semua prediksi sudah di-review!"
             elif pending > 50:
-                msg += f"\n\u26a0\ufe0f <b>{pending}</b> prediksi perlu review \u2014 prioritaskan MANUAL!"
+                msg += f"\n⚠️ <b>{pending}</b> prediksi perlu review segera!"
             else:
-                msg += f"\n\u26a0\ufe0f Ada <b>{pending}</b> prediksi yang perlu review."
+                msg += f"\n⚠️ Ada <b>{pending}</b> prediksi yang perlu review."
             await self._reply(update, msg)
         except Exception as e:
             _LOGGER.exception("pendingreview failed")
@@ -594,7 +580,7 @@ class AdminCommandHandler:
                 st = r.get("stats", {})
                 total = st.get("total_predictions", 0)
                 auto = st.get("auto_count", 0)
-                manual = st.get("manual_count", 0)
+                review = st.get("review_count", 0)
                 reviewed = st.get("reviewed_count", 0)
                 pending = st.get("pending_count", 0)
                 conf = st.get("avg_confidence", 0)
@@ -607,7 +593,7 @@ class AdminCommandHandler:
                     f"\U0001f4e6 Model: <code>{model_version}</code>\n"
                     f"\U0001f4ca Total Prediksi: <b>{total:,}</b>\n"
                     f"\U0001f916 Auto-classified: <b>{auto:,}</b> ({auto_rate:.1f}%)\n"
-                    f"\u270d\ufe0f Manual: <b>{manual:,}</b>\n"
+                    f"\U0001f4cb Review: <b>{review:,}</b>\n"
                     f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
                     f"\u23f3 Pending: <b>{pending:,}</b>\n"
                     f"\U0001f3af Avg Confidence: <b>{conf:.1%}</b>\n\n"
@@ -1282,7 +1268,7 @@ class TrendAlertService:
 
     # Thresholds
     AUTO_RATE_MIN = 0.70        # Alert if automation rate drops below 70%
-    MANUAL_RATE_MAX = 0.25      # Alert if manual rate exceeds 25%
+    REVIEW_RATE_MAX = 0.30      # Alert if review rate exceeds 30%
     CONFIDENCE_MIN = 0.80       # Alert if avg confidence drops below 80%
     PENDING_MAX = 50            # Alert if pending queue exceeds 50
 
@@ -1354,12 +1340,12 @@ class TrendAlertService:
             return None
 
         auto = stats.get("auto_count", 0)
-        manual = stats.get("manual_count", 0)
+        review = stats.get("review_count", 0)
         pending = stats.get("pending_count", 0)
         confidence = stats.get("avg_confidence", 0)
 
         auto_rate = auto / total
-        manual_rate = manual / total
+        review_rate = review / total
 
         alerts: list[str] = []
 
@@ -1369,10 +1355,10 @@ class TrendAlertService:
                 f"  Rate: {auto_rate:.1%} (threshold: {self.AUTO_RATE_MIN:.0%})"
             )
 
-        if manual_rate > self.MANUAL_RATE_MAX:
+        if review_rate > self.REVIEW_RATE_MAX:
             alerts.append(
-                f"\U0001f7e0 <b>Manual Rate Tinggi!</b>\n"
-                f"  Rate: {manual_rate:.1%} (threshold: {self.MANUAL_RATE_MAX:.0%})"
+                f"\U0001f7e0 <b>Review Rate Tinggi!</b>\n"
+                f"  Rate: {review_rate:.1%} (threshold: {self.REVIEW_RATE_MAX:.0%})"
             )
 
         if confidence < self.CONFIDENCE_MIN:
@@ -1396,7 +1382,7 @@ class TrendAlertService:
         )
         body = "\n\n".join(alerts)
         footer = (
-            f"\n\n\U0001f4ca Total: {total:,} | Auto: {auto:,} | Manual: {manual:,}\n"
+            f"\n\n\U0001f4ca Total: {total:,} | Auto: {auto:,} | Review: {review:,}\n"
             f"\U0001f4a1 Gunakan /report untuk detail lengkap."
         )
 

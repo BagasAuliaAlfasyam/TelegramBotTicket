@@ -48,13 +48,11 @@ class PredictionServiceConfig:
     gemini_api_key: str = ""
     gemini_model_name: str = "gemini-2.0-flash"
     gemini_enabled: bool = True
-    gemini_cascade_threshold: float = 0.80  # Below this, ask Gemini
+    gemini_cascade_threshold: float = 0.75  # Below this, ask Gemini
     gemini_timeout: float = 10.0  # seconds
 
-    # ML Thresholds
-    threshold_auto: float = 0.80
-    threshold_high: float = 0.70
-    threshold_medium: float = 0.50
+    # ML Threshold (2-tier: AUTO >= 0.75, REVIEW < 0.75)
+    threshold_auto: float = 0.75
 
     # Service
     host: str = "0.0.0.0"
@@ -75,11 +73,9 @@ class PredictionServiceConfig:
             gemini_api_key=os.getenv("GEMINI_API_KEY", ""),
             gemini_model_name=os.getenv("GEMINI_MODEL_NAME", "gemini-2.0-flash"),
             gemini_enabled=os.getenv("GEMINI_ENABLED", "true").lower() in ("true", "1"),
-            gemini_cascade_threshold=float(os.getenv("GEMINI_CASCADE_THRESHOLD", "0.80")),
+            gemini_cascade_threshold=float(os.getenv("GEMINI_CASCADE_THRESHOLD", "0.75")),
             gemini_timeout=float(os.getenv("GEMINI_TIMEOUT", "10.0")),
-            threshold_auto=float(os.getenv("ML_THRESHOLD_AUTO", "0.80")),
-            threshold_high=float(os.getenv("ML_THRESHOLD_HIGH", "0.70")),
-            threshold_medium=float(os.getenv("ML_THRESHOLD_MEDIUM", "0.50")),
+            threshold_auto=float(os.getenv("ML_THRESHOLD_AUTO", "0.75")),
             host=os.getenv("SERVICE_HOST", "0.0.0.0"),
             port=int(os.getenv("SERVICE_PORT", "8001")),
             debug=os.getenv("DEBUG", "false").lower() in ("true", "1"),

@@ -98,7 +98,7 @@ async def predict(request: PredictionRequest):
         return PredictionResult(
             predicted_symtomps="",
             ml_confidence=0.0,
-            prediction_status="MANUAL",
+            prediction_status="REVIEW",
             inference_time_ms=0.0,
             source="lightgbm",
         )
