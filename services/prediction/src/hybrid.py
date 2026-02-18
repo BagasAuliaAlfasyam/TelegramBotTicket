@@ -137,11 +137,9 @@ class HybridClassifier:
                 else:
                     # Both agree or LightGBM is still better
                     if gemini_label == lgbm_label:
-                        # Both agree! Boost confidence
-                        final_confidence = min(
-                            (lgbm_confidence + gemini_confidence) / 2 * 1.1,
-                            0.99
-                        )
+                        # Both agree! Boost confidence (never lower than original)
+                        boosted = (lgbm_confidence + gemini_confidence) / 2 * 1.1
+                        final_confidence = min(max(lgbm_confidence, boosted), 0.99)
                         source = PredictionSource.HYBRID
                         _LOGGER.info(
                             "Both agree on %s! Boosted confidence: %.1f%%",

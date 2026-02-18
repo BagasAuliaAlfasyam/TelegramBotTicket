@@ -146,10 +146,17 @@ KATEGORI YANG TERSEDIA:
 Jawab dalam format JSON:
 {{"label": "NAMA_KATEGORI", "confidence": 0.85, "reasoning": "alasan singkat"}}"""
 
-            response = self._model.generate_content(user_prompt)
+            response = self._model.generate_content(
+                user_prompt,
+                request_options={"timeout": self._timeout},
+            )
 
             # Parse JSON response
-            response_text = response.text.strip()
+            response_text = response.text
+            if response_text is None:
+                _LOGGER.warning("Gemini returned empty response (possibly blocked by safety filters)")
+                return None
+            response_text = response_text.strip()
 
             # Handle potential markdown code blocks
             if response_text.startswith("```"):
@@ -171,8 +178,8 @@ Jawab dalam format JSON:
                 if matched:
                     label = matched
                 else:
-                    _LOGGER.warning("Gemini returned unknown label: %s", label)
-                    confidence *= 0.5  # Penalize unknown labels
+                    _LOGGER.warning("Gemini returned unknown label: %s (not in %d known labels)", label, len(self._labels))
+                    return None  # Reject unknown labels entirely
 
             inference_time = (time.time() - start_time) * 1000
 
