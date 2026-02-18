@@ -75,8 +75,8 @@ class AdminCommandHandler:
             "└ /reloadmodel — Load model terbaru\n\n"
             "📋 <b>LAPORAN TIKET</b>\n"
             "└ /tiketreport — Laporan tiket &amp; SLA\n"
-            "   <code>/tiketreport monthly [bln] [thn]</code>\n"
-            "   <code>/tiketreport quarterly [q] [thn]</code>\n\n"
+            "   <code>/tiketreport monthly [bln] [thn] [MIT|MIS]</code>\n"
+            "   <code>/tiketreport quarterly [q] [thn] [MIT|MIS]</code>\n\n"
             "💡 <i>Semua command bisa langsung di-tap!</i>"
         )
         await self._reply(update, msg)
@@ -353,13 +353,14 @@ class AdminCommandHandler:
     # =================== /tiketreport ===================
     async def tiket_report(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         """
-        /tiketreport [monthly|quarterly] [bulan/quarter] [tahun]
+        /tiketreport [monthly|quarterly] [bulan/quarter] [tahun] [MIT|MIS]
 
         Contoh:
-            /tiketreport → bulan ini
+            /tiketreport → bulan ini (semua app)
             /tiketreport monthly 12 2025 → Desember 2025
+            /tiketreport monthly 2 2026 MIT → Feb 2026 MyTech only
             /tiketreport quarterly → quarter ini
-            /tiketreport quarterly 4 2025 → Q4 2025
+            /tiketreport quarterly 4 2025 MIS → Q4 2025 MyStaff only
         """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
@@ -370,14 +371,25 @@ class AdminCommandHandler:
             await self._reply(
                 update,
                 "📖 <b>Cara pakai:</b>\n"
-                "  /tiketreport — Bulan ini\n"
-                "  /tiketreport monthly [bulan] [tahun]\n"
-                "  /tiketreport quarterly [quarter] [tahun]\n\n"
+                "  /tiketreport — Bulan ini (semua app)\n"
+                "  /tiketreport monthly [bulan] [tahun] [MIT|MIS]\n"
+                "  /tiketreport quarterly [quarter] [tahun] [MIT|MIS]\n\n"
+                "<b>Filter App (opsional):</b>\n"
+                "  MIT = MyTech | MIS = MyStaff\n\n"
                 "<b>Contoh:</b>\n"
                 "  /tiketreport monthly 12 2025 → Desember 2025\n"
-                "  /tiketreport quarterly 4 2025 → Q4 2025",
+                "  /tiketreport monthly 2 2026 MIT → Feb 2026 MyTech\n"
+                "  /tiketreport quarterly 4 2025 MIS → Q4 2025 MyStaff",
             )
             return
+
+        # Parse optional app filter (last arg could be MIT or MIS)
+        app_filter: str | None = None
+        _APP_NAMES = {"MIT": "MyTech", "MIS": "MyStaff"}
+        # Check if last arg is an app code
+        if len(args) >= 2 and args[-1].upper() in _APP_NAMES:
+            app_filter = args[-1].upper()
+            args = args[:-1]  # remove app filter from args for period parsing
 
         await self._reply(update, "⏳ Mengambil data dari Logs sheet...")
 
@@ -471,6 +483,10 @@ class AdminCommandHandler:
                 q_months = [nama_bulan[start_month + i] for i in range(3)]
                 period_label = f"Q{quarter} {year} ({', '.join(q_months)})"
 
+            # Append app filter to label
+            if app_filter:
+                period_label += f" — {_APP_NAMES[app_filter]} ({app_filter})"
+
             # Filter and analyze
             total_tickets = 0
             sla_times: list[float] = []
@@ -495,6 +511,12 @@ class AdminCommandHandler:
                         continue
                 if not ticket_date or ticket_date < start_date or ticket_date > end_date:
                     continue
+
+                # App filter
+                if app_filter and app_col != -1:
+                    row_app = row[app_col].strip().upper() if len(row) > app_col else ""
+                    if row_app != app_filter:
+                        continue
 
                 total_tickets += 1
 
