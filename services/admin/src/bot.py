@@ -74,7 +74,9 @@ class AdminCommandHandler:
             "├ /retrainstatus — Cek progress training\n"
             "└ /reloadmodel — Load model terbaru\n\n"
             "📋 <b>LAPORAN TIKET</b>\n"
-            "└ /tiketreport — Ringkasan tiket &amp; SLA\n\n"
+            "└ /tiketreport — Laporan tiket &amp; SLA\n"
+            "   <code>/tiketreport monthly [bln] [thn]</code>\n"
+            "   <code>/tiketreport quarterly [q] [thn]</code>\n\n"
             "💡 <i>Semua command bisa langsung di-tap!</i>"
         )
         await self._reply(update, msg)
@@ -350,37 +352,231 @@ class AdminCommandHandler:
 
     # =================== /tiketreport ===================
     async def tiket_report(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+        """
+        /tiketreport [monthly|quarterly] [bulan/quarter] [tahun]
+
+        Contoh:
+            /tiketreport → bulan ini
+            /tiketreport monthly 12 2025 → Desember 2025
+            /tiketreport quarterly → quarter ini
+            /tiketreport quarterly 4 2025 → Q4 2025
+        """
         if not update.effective_user or not self._is_admin(update.effective_user.id):
             return
+
+        args = ctx.args or []
+        period = args[0].lower() if args else "monthly"
+        if period not in ("monthly", "quarterly"):
+            await self._reply(
+                update,
+                "📖 <b>Cara pakai:</b>\n"
+                "  /tiketreport — Bulan ini\n"
+                "  /tiketreport monthly [bulan] [tahun]\n"
+                "  /tiketreport quarterly [quarter] [tahun]\n\n"
+                "<b>Contoh:</b>\n"
+                "  /tiketreport monthly 12 2025 → Desember 2025\n"
+                "  /tiketreport quarterly 4 2025 → Q4 2025",
+            )
+            return
+
+        await self._reply(update, "⏳ Mengambil data dari Logs sheet...")
+
         try:
-            s = await self._api_get(f"{self._data_url}/stats/realtime")
-            total = s.get("total_predictions", 0)
-            auto = s.get("auto_count", 0)
-            pending = s.get("pending_count", 0)
-            auto_pct = auto / total * 100 if total else 0
+            from collections import Counter
+            from datetime import timedelta
 
-            # Also get training data count for more info
-            try:
-                d = await self._api_get(f"{self._data_url}/training/data")
-                training_samples = d.get("total_samples", 0)
-            except Exception:
-                training_samples = "?"
+            # Fetch all logs via Data API
+            data = await self._api_get(f"{self._data_url}/logs/all")
+            all_rows = data.get("rows", [])
+            if len(all_rows) <= 1:
+                await self._reply(update, "❌ Tidak ada data di Logs sheet.")
+                return
 
+            headers = all_rows[0]
+
+            # Find columns
+            def _col(name: str) -> int:
+                return headers.index(name) if name in headers else -1
+
+            date_col = _col("Ticket Date")
+            sla_time_col = _col("SLA Response Time")
+            sla_status_col = _col("SLA Status")
+            symtomps_col = _col("Symtomps")
+            app_col = _col("App")
+            solver_col = _col("Solver")
+
+            if date_col == -1:
+                await self._reply(update, "❌ Kolom 'Ticket Date' tidak ditemukan.")
+                return
+
+            # Calculate date range
+            today = datetime.now(TZ).date()
+            nama_bulan = [
+                "", "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+                "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+            ]
+
+            if period == "monthly":
+                if len(args) >= 3:
+                    try:
+                        month, year = int(args[1]), int(args[2])
+                        if not 1 <= month <= 12:
+                            await self._reply(update, "❌ Bulan harus 1-12")
+                            return
+                        start_date = datetime(year, month, 1).date()
+                        end_date = (
+                            datetime(year + 1, 1, 1).date() - timedelta(days=1)
+                            if month == 12
+                            else datetime(year, month + 1, 1).date() - timedelta(days=1)
+                        )
+                    except ValueError:
+                        await self._reply(update, "❌ Format: /tiketreport monthly [bulan] [tahun]")
+                        return
+                else:
+                    month, year = today.month, today.year
+                    start_date = today.replace(day=1)
+                    end_date = today
+                period_label = f"{nama_bulan[month]} {year}"
+            else:  # quarterly
+                if len(args) >= 3:
+                    try:
+                        quarter, year = int(args[1]), int(args[2])
+                        if not 1 <= quarter <= 4:
+                            await self._reply(update, "❌ Quarter harus 1-4")
+                            return
+                        start_month = (quarter - 1) * 3 + 1
+                        start_date = datetime(year, start_month, 1).date()
+                        end_month = start_month + 2
+                        end_date = (
+                            datetime(year + 1, 1, 1).date() - timedelta(days=1)
+                            if end_month == 12
+                            else datetime(year, end_month + 1, 1).date() - timedelta(days=1)
+                        )
+                    except ValueError:
+                        await self._reply(update, "❌ Format: /tiketreport quarterly [quarter] [tahun]")
+                        return
+                else:
+                    quarter = (today.month - 1) // 3 + 1
+                    start_month = (quarter - 1) * 3 + 1
+                    year = today.year
+                    start_date = today.replace(month=start_month, day=1)
+                    end_date = today
+                q_months = [nama_bulan[start_month + i] for i in range(3)]
+                period_label = f"Q{quarter} {year} ({', '.join(q_months)})"
+
+            # Filter and analyze
+            total_tickets = 0
+            sla_times: list[float] = []
+            sla_met = 0
+            sla_breach = 0
+            symtomps_counter: Counter = Counter()
+            app_counter: Counter = Counter()
+            solver_counter: Counter = Counter()
+
+            for row in all_rows[1:]:
+                if len(row) <= date_col or not row[date_col]:
+                    continue
+
+                # Parse date
+                date_str = row[date_col].split()[0]
+                ticket_date = None
+                for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
+                    try:
+                        ticket_date = datetime.strptime(date_str, fmt).date()
+                        break
+                    except ValueError:
+                        continue
+                if not ticket_date or ticket_date < start_date or ticket_date > end_date:
+                    continue
+
+                total_tickets += 1
+
+                # SLA Time
+                if sla_time_col != -1 and len(row) > sla_time_col and row[sla_time_col]:
+                    try:
+                        t = float(row[sla_time_col])
+                        if t > 0:
+                            sla_times.append(t)
+                    except ValueError:
+                        pass
+
+                # SLA Status
+                if sla_status_col != -1 and len(row) > sla_status_col:
+                    st = row[sla_status_col].strip().upper()
+                    if st in ("MET", "OK", "WITHIN SLA"):
+                        sla_met += 1
+                    elif st in ("BREACH", "BREACHED", "OVER SLA", "LATE", "TERLAMBAT"):
+                        sla_breach += 1
+
+                # Symtomps
+                if symtomps_col != -1 and len(row) > symtomps_col and row[symtomps_col].strip():
+                    symtomps_counter[row[symtomps_col].strip()] += 1
+
+                # App
+                if app_col != -1 and len(row) > app_col and row[app_col].strip():
+                    app_counter[row[app_col].strip().upper()] += 1
+
+                # Solver
+                if solver_col != -1 and len(row) > solver_col and row[solver_col].strip():
+                    solver_counter[row[solver_col].strip()] += 1
+
+            if total_tickets == 0:
+                await self._reply(
+                    update,
+                    f"📊 <b>Laporan Tiket — {period_label}</b>\n\n"
+                    f"Tidak ada tiket ditemukan untuk periode ini.",
+                )
+                return
+
+            # Calculations
+            avg_sla = sum(sla_times) / len(sla_times) if sla_times else 0
+            min_sla = min(sla_times) if sla_times else 0
+            max_sla = max(sla_times) if sla_times else 0
+            sla_total = sla_met + sla_breach
+            sla_pct = (sla_met / sla_total * 100) if sla_total > 0 else 0
+            top_sym = symtomps_counter.most_common(10)
+
+            # Build message
             msg = (
-                f"📋 <b>Laporan Tiket</b>\n"
+                f"📊 <b>Laporan Tiket — {period_label}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━━━━\n"
                 f"📅 {datetime.now(TZ).strftime('%d %b %Y %H:%M WIB')}\n\n"
-                f"📈 Total Tiket Diproses: <b>{total:,}</b>\n"
-                f"⚡ Automation Rate: <b>{auto_pct:.1f}%</b>\n"
-                f"📋 Pending Review: <b>{pending:,}</b>\n"
-                f"📊 Training Samples: <b>{training_samples:,}</b>\n\n"
-                f"<b>Distribusi:</b>\n"
-                f"  ✅ AUTO: {auto:,}\n"
-                f"  🔶 HIGH: {s.get('high_count', 0):,}\n"
-                f"  🟡 MEDIUM: {s.get('medium_count', 0):,}\n"
-                f"  🔴 MANUAL: {s.get('manual_count', 0):,}"
+                f"<b>📋 Ringkasan</b>\n"
+                f"  Total Tiket: <b>{total_tickets:,}</b>\n"
             )
+
+            # App breakdown
+            if app_counter:
+                parts = [f"{k}: {v:,}" for k, v in app_counter.most_common()]
+                msg += f"  Per Aplikasi: {' | '.join(parts)}\n"
+
+            msg += (
+                f"\n<b>⏱️ SLA Response Time</b>\n"
+                f"  Rata-rata: <b>{avg_sla:.1f} menit</b>\n"
+                f"  Tercepat: {min_sla:.1f} menit\n"
+                f"  Terlama: {max_sla:.1f} menit\n\n"
+                f"<b>📈 SLA Compliance</b>\n"
+                f"  ✅ Tercapai: {sla_met:,}\n"
+                f"  ❌ Terlambat: {sla_breach:,}\n"
+                f"  📊 Rate: <b>{sla_pct:.1f}%</b>\n"
+            )
+
+            # Solver breakdown
+            if solver_counter:
+                msg += "\n<b>👤 Per Solver</b>\n"
+                for name, count in solver_counter.most_common():
+                    pct = count / total_tickets * 100
+                    msg += f"  {name}: {count:,} ({pct:.0f}%)\n"
+
+            # Top symtomps
+            if top_sym:
+                msg += "\n<b>🏷️ Top 10 Symtomps</b>\n"
+                for i, (sym, count) in enumerate(top_sym, 1):
+                    pct = count / total_tickets * 100
+                    msg += f"  {i}. {sym}: {count:,} ({pct:.1f}%)\n"
+
             await self._reply(update, msg)
+
         except Exception as e:
             _LOGGER.exception("tiketreport failed")
             await self._reply(update, f"❌ Gagal membuat laporan tiket.\n<code>{e}</code>")

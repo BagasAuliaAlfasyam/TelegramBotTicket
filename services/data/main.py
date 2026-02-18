@@ -91,6 +91,18 @@ app.add_middleware(
 
 # ============ Logs Endpoints ============
 
+@app.get("/logs/all")
+async def logs_all():
+    """Get all rows from Logs sheet (headers + data)."""
+    if not sheets_client:
+        raise HTTPException(503, "Sheets not connected")
+    try:
+        data = sheets_client.get_all_logs_data()
+        return {"rows": data, "total": max(len(data) - 1, 0)}
+    except Exception as e:
+        _LOGGER.exception("Failed to get all logs: %s", e)
+        raise HTTPException(500, f"Failed: {e}")
+
 @app.post("/logs/append")
 async def logs_append(request: LogRowRequest):
     """Append a log row to the Logs sheet."""
