@@ -642,8 +642,9 @@ class AdminCommandHandler:
                     stage = v.get("stage", "None")
                     raw_ts = v.get("created_at")
                     if isinstance(raw_ts, (int, float)) and raw_ts > 1e12:
-                        from datetime import UTC, datetime
-                        created = datetime.fromtimestamp(raw_ts / 1000, tz=UTC).strftime("%Y-%m-%d")
+                        from datetime import datetime
+                        from zoneinfo import ZoneInfo
+                        created = datetime.fromtimestamp(raw_ts / 1000, tz=ZoneInfo("Asia/Jakarta")).strftime("%Y-%m-%d")
                     elif isinstance(raw_ts, str):
                         created = raw_ts[:10]
                     else:
