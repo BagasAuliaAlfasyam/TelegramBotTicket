@@ -40,7 +40,7 @@ from services.shared.config import CollectorBotConfig, setup_logging
 _LOGGER = logging.getLogger(__name__)
 
 _ALLOWED_APPS = {"MIT", "MIS"}
-_SOLVER_NAME_MAP = {"-bg": "Bagas", "-dm": "Damas", "-dvd": "David", "-fr": "Fairuz"}
+_SOLVER_NAME_MAP = {"-bg": "Bagas", "-dm": "Damas", "-dvd": "David", "-fr": "Fairuz", "Eri":"-ej"}
 _DEFAULT_MIME_BY_TYPE = {
     "photo": "image/jpeg", "document": "application/octet-stream",
     "video": "video/mp4", "animation": "video/mp4", "audio": "audio/mpeg",
