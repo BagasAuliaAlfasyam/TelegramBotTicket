@@ -33,9 +33,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
 from services.data.src.tracking import MLTrackingClient
