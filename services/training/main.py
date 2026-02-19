@@ -30,6 +30,8 @@ config = TrainingServiceConfig.from_env()
 setup_logging(config.debug, "training-api")
 
 pipeline: RetrainPipeline | None = None
+MIN_TUNE_TRIALS = 1
+MAX_TUNE_TRIALS = 200
 
 
 @asynccontextmanager
@@ -57,17 +59,27 @@ app.add_middleware(
 
 
 @app.post("/train")
-async def train(body: dict = {}):
+async def train(body: dict | None = None):
     """Trigger retraining. Runs synchronously (or in background thread)."""
     if not pipeline:
         raise HTTPException(503, "Pipeline not initialized")
 
+    body = body or {}
+
     if not _train_lock.acquire(blocking=False):
         return {"success": False, "message": "Training already in progress", "status": "running"}
 
-    force = body.get("force", False)
-    tune = body.get("tune", False)
-    tune_trials = body.get("tune_trials", 50)
+    force = bool(body.get("force", False))
+    tune = bool(body.get("tune", False))
+
+    raw_tune_trials = body.get("tune_trials", 50)
+    try:
+        tune_trials = int(raw_tune_trials)
+    except (TypeError, ValueError):
+        _train_lock.release()
+        raise HTTPException(400, "tune_trials must be an integer")
+
+    tune_trials = max(MIN_TUNE_TRIALS, min(tune_trials, MAX_TUNE_TRIALS))
 
     # Run in background thread to not block the API
     def _run():

@@ -7,6 +7,7 @@ No direct Google Sheets or ML model access.
 from __future__ import annotations
 
 import asyncio
+import html
 import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -391,7 +392,10 @@ class AdminCommandHandler:
             asyncio.create_task(self._poll_training(progress_msg))
         except Exception as e:
             _LOGGER.exception("retrain failed")
-            await progress_msg.edit_text(f"❌ Gagal memulai training.\n<code>{e}</code>", parse_mode="HTML")
+            await progress_msg.edit_text(
+                f"❌ Gagal memulai training.\n<code>{html.escape(str(e))}</code>",
+                parse_mode="HTML",
+            )
 
     async def _poll_training(self, msg) -> None:
         """Poll training status and live-edit the progress message."""
@@ -430,9 +434,10 @@ class AdminCommandHandler:
                         pass
                     return
                 elif status == "failed":
+                    error_message = html.escape(str(r.get("last_result", {}).get("message", "Unknown error")))
                     await msg.edit_text(
                         f"❌ <b>Training Gagal</b> ({mm}m {ss}s)\n\n"
-                        f"{r.get('last_result', {}).get('message', 'Unknown error')}",
+                        f"{error_message}",
                         parse_mode="HTML",
                     )
                     return
@@ -457,7 +462,6 @@ class AdminCommandHandler:
         n_samples = progress.get("n_samples", 0)
         n_classes = progress.get("n_classes", 0)
         n_features = progress.get("n_features", 0)
-        tune = progress.get("tune", False)
         current_trial = progress.get("current_trial", 0)
         total_trials = progress.get("total_trials", 0)
         current_f1 = progress.get("current_f1", 0.0)
@@ -486,14 +490,14 @@ class AdminCommandHandler:
             bar = "▓" * filled + "░" * (bar_len - filled)
             pct = int(100 * current_trial / total_trials) if total_trials else 0
 
-            lines.append(f"🔬 <b>Optuna Hyperparameter Tuning</b>")
+            lines.append("🔬 <b>Optuna Hyperparameter Tuning</b>")
             lines.append(f"<code>{bar}</code> {current_trial}/{total_trials} ({pct}%)")
             lines.append("")
             if current_trial > 0:
                 lines.append(f"📈 Trial {current_trial}: F1 = <b>{current_f1:.4f}</b>")
                 lines.append(f"🏆 Best F1:  <b>{best_f1:.4f}</b>")
         else:
-            lines.append(phase_label)
+            lines.append(html.escape(str(phase_label)))
 
         return "\n".join(lines)
 
