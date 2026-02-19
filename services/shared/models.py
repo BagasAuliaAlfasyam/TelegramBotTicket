@@ -71,9 +71,12 @@ class ModelInfoResponse(BaseModel):
     classes: list[str] = []
     thresholds: dict[str, float] = {}
     loaded_from_mlflow: bool = False
+    loaded_stage: str | None = None
+    model_run_id: str | None = None
     gemini_enabled: bool = False
     training_samples: int | None = None
     training_accuracy: float | None = None
+    training_f1_macro: float | None = None
     trained_at: str | None = None
 
     model_config = {"extra": "ignore"}

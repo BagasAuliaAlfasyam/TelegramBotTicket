@@ -441,16 +441,19 @@ class AdminCommandHandler:
                         f"✅ <b>Training Selesai!</b> ({mm}m {ss}s)\n"
                         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
                         f"🎯 F1 Score: <b>{result.get('f1_score', 'N/A')}</b>\n"
+                        f"📏 Eval Mode: <b>{html.escape(str(result.get('evaluation_mode', 'N/A')))}</b>\n"
                         f"📊 Samples: {result.get('n_samples', '?'):,}\n"
                         f"🏷 Classes: {result.get('n_classes', '?')}\n"
                         f"📦 Version: <code>{result.get('model_version', '?')}</code>\n\n"
+                        f"🆔 Run ID: <code>{html.escape(str(result.get('mlflow_run_id', '?')))}</code>\n"
                         f"➡️ /reloadmodel untuk load model baru\n"
                         f"➡️ /mlflowpromote untuk promote ke Production",
                         parse_mode="HTML",
                     )
                     # Auto-reload and mark trained
                     try:
-                        await self._api_post(f"{self._prediction_url}/model/reload", json={"stage": "Staging"})
+                        target_stage = result.get("promoted_stage") or "Production"
+                        await self._api_post(f"{self._prediction_url}/model/reload", json={"stage": target_stage})
                         await self._api_post(f"{self._data_url}/training/mark")
                     except Exception:
                         pass
@@ -639,10 +642,14 @@ class AdminCommandHandler:
             elif status == "completed":
                 last_result = r.get("last_result", {})
                 if last_result:
+                    run_id = html.escape(str(last_result.get("mlflow_run_id", "?")))
                     msg += (
                         f"\n\n\U0001f3c6 <b>Hasil Terakhir:</b>\n"
                         f"\u251c \U0001f3af F1: {last_result.get('f1_score', 'N/A')}\n"
+                        f"\u251c \U0001f4cf Eval: {html.escape(str(last_result.get('evaluation_mode', 'N/A')))}\n"
                         f"\u251c \U0001f4e6 Version: {last_result.get('model_version', '?')}\n"
+                        f"\u251c \U0001f194 Stage: {last_result.get('promoted_stage', '-') }\n"
+                        f"\u251c \U0001f198 Run ID: <code>{run_id}</code>\n"
                         f"\u2514 \U0001f4ca Samples: {last_result.get('n_samples', '?')}"
                     )
             await self._reply(update, msg)

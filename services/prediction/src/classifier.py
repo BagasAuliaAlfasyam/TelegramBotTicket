@@ -41,6 +41,8 @@ class LightGBMClassifier:
         self._preprocessor = None
         self._is_loaded = False
         self._model_version = "unknown"
+        self._model_stage = "unknown"
+        self._model_run_id = None
         self._metadata = {}
 
     def load(self, stage: str = "Production") -> bool:
@@ -71,6 +73,8 @@ class LightGBMClassifier:
             self._preprocessor = model_data.get("preprocessor")
             self._metadata = model_data["metadata"]
             self._model_version = f"mlflow-v{model_data['version']}"
+            self._model_stage = str(model_data.get("stage") or "unknown")
+            self._model_run_id = model_data.get("run_id")
             self._is_loaded = True
 
             _LOGGER.info(
@@ -97,6 +101,8 @@ class LightGBMClassifier:
         self._char_tfidf = None
         self._has_char_tfidf = False
         self._label_encoder = None
+        self._model_stage = "unknown"
+        self._model_run_id = None
 
         success = self.load(stage)
         return success, old_version, self._model_version
@@ -179,6 +185,14 @@ class LightGBMClassifier:
     @property
     def model_version(self) -> str:
         return self._model_version
+
+    @property
+    def model_stage(self) -> str:
+        return self._model_stage
+
+    @property
+    def model_run_id(self) -> str | None:
+        return self._model_run_id
 
     @property
     def num_classes(self) -> int:

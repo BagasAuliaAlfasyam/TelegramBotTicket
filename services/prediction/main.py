@@ -134,6 +134,8 @@ async def model_info():
     info = classifier.get_info()
     return ModelInfoResponse(
         version=info.get("version", "unknown"),
+        loaded_stage=info.get("loaded_stage"),
+        model_run_id=info.get("model_run_id"),
         is_loaded=info.get("is_loaded", False),
         num_classes=info.get("num_classes", 0),
         classes=info.get("classes", []),
@@ -142,6 +144,7 @@ async def model_info():
         gemini_enabled=info.get("gemini_enabled", False),
         training_samples=info.get("training_samples"),
         training_accuracy=info.get("training_accuracy"),
+        training_f1_macro=info.get("training_f1_macro"),
         trained_at=info.get("trained_at"),
     )
 

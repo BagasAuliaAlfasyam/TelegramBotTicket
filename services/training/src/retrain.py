@@ -400,6 +400,8 @@ class RetrainPipeline:
         # 8. Log to MLflow
         self._set_phase("logging_mlflow", "📦 Logging ke MLflow...")
         mlflow_version = None
+        mlflow_run_id = None
+        promoted_stage = None
         try:
             import json as _json
             import os
@@ -421,6 +423,7 @@ class RetrainPipeline:
             run_name = f"train-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}"
             with mlflow.start_run(run_name=run_name):
                 active_run_id = mlflow.active_run().info.run_id
+                mlflow_run_id = active_run_id
                 mlflow.log_params({k: str(v) for k, v in params.items()})
                 mlflow.log_param("evaluation_mode", eval_mode)
                 mlflow.log_metric("f1_macro", f1_macro)
@@ -576,6 +579,7 @@ class RetrainPipeline:
                     stage="Production",
                     archive_existing_versions=True,
                 )
+                promoted_stage = "Production"
                 _LOGGER.info("MLflow Version: v%s (promoted to Production)", mlflow_version)
 
         except Exception as e:
@@ -594,10 +598,14 @@ class RetrainPipeline:
             "success": True,
             "status": "completed",
             "f1_score": round(f1_macro, 4),
+            "accuracy": round(float(accuracy), 4),
+            "evaluation_mode": eval_mode,
             "n_samples": len(texts),
             "n_classes": len(le.classes_),
             "classes": list(le.classes_),
             "model_version": f"v{mlflow_version}" if mlflow_version else "local",
+            "mlflow_run_id": mlflow_run_id,
+            "promoted_stage": promoted_stage,
             "elapsed_seconds": round(elapsed, 1),
             "message": f"Training complete. F1={f1_macro:.4f}, {len(texts)} samples, {len(le.classes_)} classes.",
         }

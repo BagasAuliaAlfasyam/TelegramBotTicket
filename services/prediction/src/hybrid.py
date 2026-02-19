@@ -180,6 +180,8 @@ class HybridClassifier:
         """Get combined model info."""
         info = {
             "version": self._lgbm.model_version,
+            "loaded_stage": self._lgbm.model_stage,
+            "model_run_id": self._lgbm.model_run_id,
             "is_loaded": self._lgbm.is_loaded,
             "num_classes": self._lgbm.num_classes,
             "classes": self._lgbm.classes,
@@ -191,6 +193,7 @@ class HybridClassifier:
             "gemini_enabled": self._gemini is not None and self._gemini.is_ready,
             "training_samples": self._lgbm.metadata.get("n_samples"),
             "training_accuracy": self._lgbm.metadata.get("f1_macro"),
+            "training_f1_macro": self._lgbm.metadata.get("f1_macro"),
             "trained_at": self._lgbm.metadata.get("trained_at"),
         }
 
