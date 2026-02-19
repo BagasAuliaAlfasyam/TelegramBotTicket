@@ -26,9 +26,10 @@ from scipy.sparse import hstack
 from services.shared.config import TrainingServiceConfig
 from services.shared.preprocessing import ITSupportTextPreprocessor
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 
 _LOGGER = logging.getLogger(__name__)
+VALIDATION_RATIO = 0.2
 
 # LightGBM default optimal params (tuned for Docker performance)
 OPTIMAL_PARAMS = {
@@ -204,7 +205,30 @@ class RetrainPipeline:
         le = LabelEncoder()
         y = le.fit_transform(labels)
 
-        # 4. Optuna tuning or fixed params
+        # 4. Build train/validation split (enterprise-safe eval for both tune and non-tune)
+        class_counts = np.bincount(y)
+        can_stratify = len(class_counts) > 1 and int(class_counts.min()) >= 2
+        try:
+            X_train, X_val, y_train, y_val = train_test_split(
+                X,
+                y,
+                test_size=VALIDATION_RATIO,
+                random_state=42,
+                stratify=y if can_stratify else None,
+            )
+            eval_mode = "stratified_holdout" if can_stratify else "random_holdout"
+        except ValueError:
+            # Fallback for edge cases with tiny classes
+            X_train, X_val, y_train, y_val = train_test_split(
+                X,
+                y,
+                test_size=VALIDATION_RATIO,
+                random_state=42,
+                stratify=None,
+            )
+            eval_mode = "random_holdout_fallback"
+
+        # 5. Optuna tuning or fixed params
         params = dict(OPTIMAL_PARAMS)
         params["num_class"] = len(le.classes_)
 
@@ -254,7 +278,7 @@ class RetrainPipeline:
                     }
                     model = lgb.LGBMClassifier(**p)
                     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-                    scores = cross_val_score(model, X, y, cv=cv, scoring="f1_macro")
+                    scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="f1_macro")
                     return scores.mean()
 
                 study = optuna.create_study(direction="maximize")
@@ -266,14 +290,18 @@ class RetrainPipeline:
             except ImportError:
                 _LOGGER.warning("Optuna not installed, using fixed params")
 
-        # 5. Train final model on all data (skip CV for speed — evaluate via training accuracy)
-        self._set_phase("training_final", "🏋️ Training model final...")
-        _LOGGER.info("Training LightGBM with %d features, %d classes...", X.shape[1], len(le.classes_))
-        model = lgb.LGBMClassifier(**params)
-        model.fit(X, y)
-        _LOGGER.info("Model training complete.")
+        # 6. Train on train split, evaluate on holdout validation
+        self._set_phase("training_final", "🏋️ Training model (train split)...")
+        _LOGGER.info(
+            "Training LightGBM with holdout eval: train=%d, val=%d, classes=%d",
+            X_train.shape[0],
+            X_val.shape[0],
+            len(le.classes_),
+        )
+        eval_model = lgb.LGBMClassifier(**params)
+        eval_model.fit(X_train, y_train)
 
-        # 6. Quick training-set accuracy as quality metric (no expensive CV)
+        self._set_phase("validating", "🧪 Evaluasi holdout validation...")
         from sklearn.metrics import (
             accuracy_score,
             classification_report,
@@ -281,12 +309,17 @@ class RetrainPipeline:
             f1_score,
             precision_recall_fscore_support,
         )
-        y_pred = model.predict(X)
-        f1_macro = f1_score(y, y_pred, average="macro")
-        accuracy = accuracy_score(y, y_pred)
+
+        y_val_pred = eval_model.predict(X_val)
+        f1_macro = f1_score(y_val, y_val_pred, average="macro")
+        accuracy = accuracy_score(y_val, y_val_pred)
+        y_train_pred = eval_model.predict(X_train)
+        train_f1_macro = f1_score(y_train, y_train_pred, average="macro")
+        train_accuracy = accuracy_score(y_train, y_train_pred)
+
         precision_cls, recall_cls, f1_cls, support_cls = precision_recall_fscore_support(
-            y,
-            y_pred,
+            y_val,
+            y_val_pred,
             labels=np.arange(len(le.classes_)),
             zero_division=0,
         )
@@ -311,13 +344,13 @@ class RetrainPipeline:
             )
 
         report_dict = classification_report(
-            y,
-            y_pred,
+            y_val,
+            y_val_pred,
             target_names=le.classes_.tolist(),
             output_dict=True,
             zero_division=0,
         )
-        conf_matrix = confusion_matrix(y, y_pred, labels=np.arange(len(le.classes_)))
+        conf_matrix = confusion_matrix(y_val, y_val_pred, labels=np.arange(len(le.classes_)))
         top_confusion_pairs = []
         for i, true_label in enumerate(le.classes_):
             for j, pred_label in enumerate(le.classes_):
@@ -335,10 +368,17 @@ class RetrainPipeline:
                 )
         top_confusion_pairs.sort(key=lambda item: item["count"], reverse=True)
         top_confusion_pairs = top_confusion_pairs[:20]
-        _LOGGER.info("Training F1 (macro): %.4f", f1_macro)
-        _LOGGER.info("Training accuracy: %.4f", accuracy)
+        _LOGGER.info("Validation F1 (macro): %.4f", f1_macro)
+        _LOGGER.info("Validation accuracy: %.4f", accuracy)
+        _LOGGER.info("Train F1 (macro): %.4f", train_f1_macro)
 
-        # 7. Log to MLflow
+        # 7. Fit final deployment model on full data after validation pass
+        self._set_phase("training_full", "🏁 Training model final (full data)...")
+        model = lgb.LGBMClassifier(**params)
+        model.fit(X, y)
+        _LOGGER.info("Final model training on full data complete.")
+
+        # 8. Log to MLflow
         self._set_phase("logging_mlflow", "📦 Logging ke MLflow...")
         mlflow_version = None
         try:
@@ -363,8 +403,15 @@ class RetrainPipeline:
             with mlflow.start_run(run_name=run_name):
                 active_run_id = mlflow.active_run().info.run_id
                 mlflow.log_params({k: str(v) for k, v in params.items()})
+                mlflow.log_param("evaluation_mode", eval_mode)
                 mlflow.log_metric("f1_macro", f1_macro)
                 mlflow.log_metric("accuracy", accuracy)
+                mlflow.log_metric("f1_macro_validation", f1_macro)
+                mlflow.log_metric("accuracy_validation", accuracy)
+                mlflow.log_metric("f1_macro_train", train_f1_macro)
+                mlflow.log_metric("accuracy_train", train_accuracy)
+                mlflow.log_metric("n_train_samples", int(X_train.shape[0]))
+                mlflow.log_metric("n_val_samples", int(X_val.shape[0]))
                 mlflow.log_metric("n_samples", len(texts))
                 mlflow.log_metric("n_classes", len(le.classes_))
 
@@ -375,9 +422,9 @@ class RetrainPipeline:
 
                 for row in per_class_metrics:
                     suffix = _safe_metric_suffix(row["class_label"])
-                    mlflow.log_metric(f"recall__{suffix}", row["recall"])
-                    mlflow.log_metric(f"precision__{suffix}", row["precision"])
-                    mlflow.log_metric(f"f1__{suffix}", row["f1"])
+                    mlflow.log_metric(f"recall_val__{suffix}", row["recall"])
+                    mlflow.log_metric(f"precision_val__{suffix}", row["precision"])
+                    mlflow.log_metric(f"f1_val__{suffix}", row["f1"])
 
                 mlflow.log_dict(class_distribution, "analysis/class_distribution.json")
                 mlflow.log_dict({"per_class_metrics": per_class_metrics}, "analysis/per_class_metrics.json")
@@ -482,8 +529,12 @@ class RetrainPipeline:
                         "classes": list(le.classes_),
                         "n_samples": len(texts),
                         "n_classes": len(le.classes_),
+                        "evaluation_mode": eval_mode,
+                        "validation_ratio": VALIDATION_RATIO,
                         "f1_macro": round(f1_macro, 4),
                         "accuracy": round(float(accuracy), 4),
+                        "f1_macro_train": round(float(train_f1_macro), 4),
+                        "accuracy_train": round(float(train_accuracy), 4),
                         "class_distribution": class_distribution,
                         "params": {k: str(v) for k, v in params.items()},
                         "trained_at": datetime.utcnow().isoformat(),
@@ -511,7 +562,7 @@ class RetrainPipeline:
         except Exception as e:
             _LOGGER.warning("MLflow logging failed (training still succeeded): %s", e)
 
-        # 8. Mark training data as TRAINED
+        # 9. Mark training data as TRAINED
         self._set_phase("marking_trained", "✅ Marking data as trained...")
         try:
             self._http.post(f"{self._config.data_api_url.rstrip('/')}/training/mark")
