@@ -240,7 +240,21 @@ class RetrainPipeline:
             _LOGGER.info("Running Optuna hyperparameter tuning (%d trials)...", tune_trials)
             try:
                 import optuna
+                from sklearn.metrics import f1_score
                 optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+                train_class_counts = np.bincount(y_train)
+                positive_train_counts = train_class_counts[train_class_counts > 0]
+                min_train_class_count = int(positive_train_counts.min()) if positive_train_counts.size else 0
+                cv_splits = min(5, min_train_class_count) if min_train_class_count >= 2 else 0
+                use_cv_for_tuning = cv_splits >= 2
+                if use_cv_for_tuning:
+                    _LOGGER.info("Optuna objective mode: stratified CV (%d folds)", cv_splits)
+                else:
+                    _LOGGER.warning(
+                        "Optuna objective mode: holdout fallback (insufficient per-class samples for CV, min_class_count=%d)",
+                        min_train_class_count,
+                    )
 
                 def _optuna_callback(study, trial):
                     """Update progress after each Optuna trial."""
@@ -277,9 +291,14 @@ class RetrainPipeline:
                         "random_state": 42, "n_jobs": -1, "verbose": -1,
                     }
                     model = lgb.LGBMClassifier(**p)
-                    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-                    scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="f1_macro")
-                    return scores.mean()
+                    if use_cv_for_tuning:
+                        cv = StratifiedKFold(n_splits=cv_splits, shuffle=True, random_state=42)
+                        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="f1_macro")
+                        return float(scores.mean())
+
+                    model.fit(X_train, y_train)
+                    y_holdout_pred = model.predict(X_val)
+                    return float(f1_score(y_val, y_holdout_pred, average="macro"))
 
                 study = optuna.create_study(direction="maximize")
                 study.optimize(objective, n_trials=tune_trials,

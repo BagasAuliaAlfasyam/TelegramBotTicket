@@ -400,17 +400,39 @@ class AdminCommandHandler:
     async def _poll_training(self, msg) -> None:
         """Poll training status and live-edit the progress message."""
         import time as _time
-        start = _time.time()
+        poll_started = _time.time()
+        max_poll_seconds = 12 * 60 * 60  # allow long Optuna runs (up to 12h)
         last_text = ""
         try:
-            for _ in range(240):  # max 60 min (240 * 15s)
+            while True:
                 await asyncio.sleep(15)
-                elapsed = int(_time.time() - start)
-                mm, ss = divmod(elapsed, 60)
                 try:
                     r = await self._api_get(f"{self._training_url}/status")
                 except Exception:
+                    if _time.time() - poll_started > max_poll_seconds:
+                        await msg.edit_text(
+                            "⏱️ <b>Monitoring timeout</b> (12 jam).\n\n"
+                            "Training mungkin masih berjalan di backend.\n"
+                            "Gunakan <code>/retrainstatus</code> untuk cek status terbaru.",
+                            parse_mode="HTML",
+                        )
+                        return
                     continue
+
+                progress = r.get("progress", {})
+                elapsed = int(_time.time() - poll_started)
+                started_at = progress.get("started_at")
+                if started_at:
+                    try:
+                        started_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                        now_dt = datetime.utcnow()
+                        if started_dt.tzinfo is not None:
+                            now_dt = datetime.now(started_dt.tzinfo)
+                        elapsed = max(0, int((now_dt - started_dt).total_seconds()))
+                    except Exception:
+                        pass
+
+                mm, ss = divmod(elapsed, 60)
 
                 status = r.get("status", "unknown")
                 if status == "completed":
@@ -443,7 +465,6 @@ class AdminCommandHandler:
                     return
 
                 # Build live progress display
-                progress = r.get("progress", {})
                 text = self._render_training_progress(progress, mm, ss)
                 if text != last_text:
                     last_text = text
@@ -451,6 +472,15 @@ class AdminCommandHandler:
                         await msg.edit_text(text, parse_mode="HTML")
                     except Exception:
                         pass  # Telegram rate limit or same content
+
+                if _time.time() - poll_started > max_poll_seconds:
+                    await msg.edit_text(
+                        f"⏱️ <b>Monitoring timeout</b> ({mm}m {ss}s)\n\n"
+                        "Training mungkin masih berjalan di backend.\n"
+                        "Gunakan <code>/retrainstatus</code> untuk cek status terbaru.",
+                        parse_mode="HTML",
+                    )
+                    return
         except Exception as e:
             _LOGGER.exception("Training poll failed: %s", e)
 
@@ -514,13 +544,48 @@ class AdminCommandHandler:
             status = r.get("status", "idle")
             status_emoji = {"idle": "\U0001f4a4", "running": "\U0001f504", "completed": "\u2705", "failed": "\u274c"}.get(status, "\u2753")
             last_trained = r.get("last_trained", "belum pernah")
+            progress = r.get("progress", {})
+            elapsed_text = ""
+            if status == "running":
+                started_at = progress.get("started_at")
+                if started_at:
+                    try:
+                        started_dt = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+                        now_dt = datetime.utcnow()
+                        if started_dt.tzinfo is not None:
+                            now_dt = datetime.now(started_dt.tzinfo)
+                        elapsed_seconds = max(0, int((now_dt - started_dt).total_seconds()))
+                        hh, rem = divmod(elapsed_seconds, 3600)
+                        mm, ss = divmod(rem, 60)
+                        if hh > 0:
+                            elapsed_text = f"\n\u23f1\ufe0f Durasi: <b>{hh}j {mm}m {ss}s</b>"
+                        else:
+                            elapsed_text = f"\n\u23f1\ufe0f Durasi: <b>{mm}m {ss}s</b>"
+                    except Exception:
+                        pass
+
+            phase_text = ""
+            if status == "running":
+                phase_label = progress.get("phase_label")
+                if phase_label:
+                    phase_text += f"\n\ud83e\uddea Fase: {html.escape(str(phase_label))}"
+
+                phase = progress.get("phase")
+                if phase == "optuna_tuning":
+                    current_trial = int(progress.get("current_trial", 0) or 0)
+                    total_trials = int(progress.get("total_trials", 0) or 0)
+                    if total_trials > 0:
+                        pct = int(100 * current_trial / total_trials)
+                        phase_text += f"\n\ud83d\udd2c Optuna: <b>{current_trial}/{total_trials}</b> ({pct}%)"
 
             msg = (
                 f"\U0001f504 <b>Training Status</b>\n"
                 f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
                 f"{status_emoji} Status: <b>{status}</b>\n"
                 f"\U0001f4c5 Terakhir Train: {last_trained}\n"
-                f"\U0001f4ca Total Data: <b>{total:,}</b> samples\n"
+                f"\U0001f4ca Total Data: <b>{total:,}</b> samples"
+                f"{elapsed_text}"
+                f"{phase_text}\n"
             )
 
             # Class distribution from tracking data
