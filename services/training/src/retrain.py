@@ -14,6 +14,7 @@ Key differences:
 from __future__ import annotations
 
 import logging
+import hashlib
 import threading
 import time
 from datetime import datetime
@@ -93,6 +94,16 @@ class RetrainPipeline:
             self._progress.update(extra)
         _LOGGER.info("Phase: %s — %s", phase, label)
 
+    @staticmethod
+    def _fingerprint_text_label_pairs(texts: list[str], labels: list[str]) -> str:
+        digest = hashlib.sha256()
+        for text, label in zip(texts, labels):
+            digest.update(text.encode("utf-8"))
+            digest.update(b"\t")
+            digest.update(label.encode("utf-8"))
+            digest.update(b"\n")
+        return digest.hexdigest()
+
     def run(self, force: bool = False, tune: bool = False, tune_trials: int = 50) -> dict:
         self._status = "running"
         try:
@@ -132,6 +143,10 @@ class RetrainPipeline:
 
         logs_data = data.get("logs_data", [])
         tracking_data = data.get("tracking_data", [])
+        dataset_fingerprint = data.get("dataset_fingerprint")
+        mark_token = data.get("mark_token")
+        snapshot_generated_at = data.get("snapshot_generated_at")
+        mark_candidates_count = int(data.get("mark_candidates_count", 0) or 0)
         _LOGGER.info("From Logs: %d, From ML_Tracking: %d", len(logs_data), len(tracking_data))
 
         # 2. Combine and prepare training data (deduplicate by tech_message_id)
@@ -180,6 +195,7 @@ class RetrainPipeline:
             return {"success": False, "message": f"Only {len(texts)} samples, need 50+. Use force=true."}
 
         n_classes = len(set(labels))
+        prepared_dataset_fingerprint = self._fingerprint_text_label_pairs(texts, labels)
         self._update_progress(n_samples=len(texts), n_classes=n_classes)
         _LOGGER.info("Total training data: %d samples, %d classes", len(texts), n_classes)
 
@@ -426,6 +442,11 @@ class RetrainPipeline:
                 mlflow_run_id = active_run_id
                 mlflow.log_params({k: str(v) for k, v in params.items()})
                 mlflow.log_param("evaluation_mode", eval_mode)
+                if dataset_fingerprint:
+                    mlflow.log_param("source_dataset_fingerprint", str(dataset_fingerprint))
+                if mark_token:
+                    mlflow.log_param("mark_token", str(mark_token))
+                mlflow.log_param("prepared_dataset_fingerprint", prepared_dataset_fingerprint)
                 mlflow.log_metric("f1_macro", f1_macro)
                 mlflow.log_metric("accuracy", accuracy)
                 mlflow.log_metric("f1_macro_validation", f1_macro)
@@ -436,6 +457,7 @@ class RetrainPipeline:
                 mlflow.log_metric("n_val_samples", int(X_val.shape[0]))
                 mlflow.log_metric("n_samples", len(texts))
                 mlflow.log_metric("n_classes", len(le.classes_))
+                mlflow.log_metric("mark_candidates_count", mark_candidates_count)
 
                 def _safe_metric_suffix(name: str) -> str:
                     cleaned = "".join(ch.lower() if ch.isalnum() else "_" for ch in name)
@@ -461,6 +483,20 @@ class RetrainPipeline:
                 mlflow.log_dict(
                     {"top_confusion_pairs": top_confusion_pairs},
                     "analysis/top_confusion_pairs.json",
+                )
+                mlflow.log_dict(
+                    {
+                        "source_dataset_fingerprint": dataset_fingerprint,
+                        "prepared_dataset_fingerprint": prepared_dataset_fingerprint,
+                        "mark_token": mark_token,
+                        "snapshot_generated_at": snapshot_generated_at,
+                        "mark_candidates_count": mark_candidates_count,
+                        "source_counts": {
+                            "logs_data": len(logs_data),
+                            "tracking_data": len(tracking_data),
+                        },
+                    },
+                    "analysis/dataset_lineage.json",
                 )
 
                 # Compare label distribution with previous run (if available)
@@ -587,10 +623,31 @@ class RetrainPipeline:
 
         # 9. Mark training data as TRAINED
         self._set_phase("marking_trained", "✅ Marking data as trained...")
+        mark_result = {
+            "attempted": False,
+            "marked_count": 0,
+            "token_matched": None,
+            "current_mark_token": None,
+        }
         try:
-            self._http.post(f"{self._config.data_api_url.rstrip('/')}/training/mark")
-        except Exception:
-            _LOGGER.warning("Failed to mark data as trained")
+            mark_resp = self._http.post(
+                f"{self._config.data_api_url.rstrip('/')}/training/mark",
+                json={"mark_token": mark_token} if mark_token else None,
+            )
+            mark_result["attempted"] = True
+            if mark_resp.status_code == 409:
+                detail = mark_resp.json().get("detail", {})
+                mark_result["token_matched"] = False
+                mark_result["current_mark_token"] = detail.get("current_mark_token")
+                _LOGGER.warning("Skipped mark_as_trained due to token mismatch")
+            else:
+                mark_resp.raise_for_status()
+                payload = mark_resp.json()
+                mark_result["marked_count"] = int(payload.get("marked_count", 0))
+                mark_result["token_matched"] = bool(payload.get("token_matched", True))
+                mark_result["current_mark_token"] = payload.get("current_mark_token")
+        except Exception as mark_err:
+            _LOGGER.warning("Failed to mark data as trained: %s", mark_err)
 
         self._set_phase("done", "✅ Training selesai!")
         elapsed = time.time() - start
@@ -606,6 +663,10 @@ class RetrainPipeline:
             "model_version": f"v{mlflow_version}" if mlflow_version else "local",
             "mlflow_run_id": mlflow_run_id,
             "promoted_stage": promoted_stage,
+            "dataset_fingerprint": dataset_fingerprint,
+            "prepared_dataset_fingerprint": prepared_dataset_fingerprint,
+            "mark_token": mark_token,
+            "mark_result": mark_result,
             "elapsed_seconds": round(elapsed, 1),
             "message": f"Training complete. F1={f1_macro:.4f}, {len(texts)} samples, {len(le.classes_)} classes.",
         }

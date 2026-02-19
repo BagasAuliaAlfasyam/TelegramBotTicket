@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import hashlib
+import json
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +45,8 @@ from services.shared.models import (
     HealthResponse,
     LogRowRequest,
     StatsResponse,
+    TrainingMarkRequest,
+    TrainingMarkResponse,
     TrackingLogRequest,
     TrainingDataResponse,
     UploadMediaResponse,
@@ -237,22 +241,56 @@ async def training_data():
         raise HTTPException(503, "Not connected")
 
     logs_data = sheets_client.get_logs_for_training()
-    tracking_data = tracking_client.get_training_data()
+    tracking_snapshot = tracking_client.get_training_snapshot()
+    tracking_data = tracking_snapshot.get("training_data", [])
+
+    dataset_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "logs_data": logs_data,
+                "tracking_data": tracking_data,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
     return TrainingDataResponse(
         logs_data=logs_data,
         tracking_data=tracking_data,
         total_samples=len(logs_data) + len(tracking_data),
+        dataset_fingerprint=dataset_fingerprint,
+        mark_token=tracking_snapshot.get("mark_token"),
+        snapshot_generated_at=tracking_snapshot.get("snapshot_generated_at"),
+        mark_candidates_count=int(tracking_snapshot.get("mark_candidates_count", 0)),
     )
 
 
-@app.post("/training/mark")
-async def training_mark():
+@app.post("/training/mark", response_model=TrainingMarkResponse)
+async def training_mark(request: TrainingMarkRequest | None = None):
     """Mark reviewed data as TRAINED after successful training."""
     if not tracking_client:
         raise HTTPException(503, "Tracking not connected")
-    count = tracking_client.mark_as_trained()
-    return {"success": True, "marked_count": count}
+
+    expected_token = request.mark_token if request else None
+    result = tracking_client.mark_as_trained(expected_mark_token=expected_token)
+
+    if expected_token is not None and not result.get("token_matched", False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Mark token mismatch. Snapshot changed since training data fetch.",
+                "current_mark_token": result.get("current_mark_token"),
+            },
+        )
+
+    return TrainingMarkResponse(
+        success=True,
+        marked_count=int(result.get("marked_count", 0)),
+        token_matched=bool(result.get("token_matched", True)),
+        current_mark_token=result.get("current_mark_token"),
+    )
 
 
 # ============ Media Upload ============

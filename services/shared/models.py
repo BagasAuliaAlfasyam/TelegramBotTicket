@@ -170,6 +170,23 @@ class TrainingDataResponse(BaseModel):
     logs_data: list[dict] = []
     tracking_data: list[dict] = []
     total_samples: int = 0
+    dataset_fingerprint: str | None = None
+    mark_token: str | None = None
+    snapshot_generated_at: str | None = None
+    mark_candidates_count: int = 0
+
+
+class TrainingMarkRequest(BaseModel):
+    """Request to mark reviewed rows as TRAINED with snapshot token binding."""
+    mark_token: str | None = None
+
+
+class TrainingMarkResponse(BaseModel):
+    """Response after mark-trained mutation attempt."""
+    success: bool
+    marked_count: int = 0
+    token_matched: bool = True
+    current_mark_token: str | None = None
 
 
 # ============ Training Service Models ============

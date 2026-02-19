@@ -6,6 +6,8 @@ Manages ML_Tracking and Monitoring sheets.
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -99,6 +101,11 @@ class MLTrackingClient:
         client = gspread.service_account(filename=str(self._config.google_service_account_json))
         self._spreadsheet = client.open(self._config.google_spreadsheet_name)
         self._tracking_sheet = self._spreadsheet.worksheet(ML_TRACKING_SHEET)
+
+    @staticmethod
+    def _stable_hash(payload: object) -> str:
+        serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
     def get_realtime_stats(self) -> dict:
         """Stats from ML_Tracking sheet."""
@@ -284,13 +291,31 @@ class MLTrackingClient:
 
     def get_training_data(self) -> list[dict]:
         """Get approved/corrected data for training."""
+        snapshot = self.get_training_snapshot()
+        return snapshot.get("training_data", [])
+
+    def get_training_snapshot(self) -> dict:
+        """Get training data plus deterministic token for mark-trained mutation."""
         if not self._tracking_sheet:
-            return []
+            return {
+                "training_data": [],
+                "mark_token": self._stable_hash([]),
+                "mark_candidates_count": 0,
+                "tracking_fingerprint": self._stable_hash([]),
+                "snapshot_generated_at": datetime.now(self._tz).isoformat(),
+            }
         try:
             all_data = self._tracking_sheet.get_all_values()
             if len(all_data) <= 1:
-                return []
+                return {
+                    "training_data": [],
+                    "mark_token": self._stable_hash([]),
+                    "mark_candidates_count": 0,
+                    "tracking_fingerprint": self._stable_hash([]),
+                    "snapshot_generated_at": datetime.now(self._tz).isoformat(),
+                }
             training = []
+            mark_candidates = []
             for row in all_data[1:]:
                 if len(row) >= 6 and row[5] in ("APPROVED", "CORRECTED", "TRAINED", "auto_approved"):
                     training.append({
@@ -301,28 +326,87 @@ class MLTrackingClient:
                         "ml_confidence": row[4],
                         "review_status": row[5],
                     })
-            return training
+                if len(row) >= 6 and row[5] in ("APPROVED", "CORRECTED"):
+                    mark_candidates.append(
+                        {
+                            "tech_message_id": row[0],
+                            "symtomps": row[3] if len(row) > 3 else "",
+                            "review_status": row[5],
+                            "timestamp": row[6] if len(row) > 6 else "",
+                        }
+                    )
+            return {
+                "training_data": training,
+                "mark_token": self._stable_hash(mark_candidates),
+                "mark_candidates_count": len(mark_candidates),
+                "tracking_fingerprint": self._stable_hash(training),
+                "snapshot_generated_at": datetime.now(self._tz).isoformat(),
+            }
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed training data: %s", exc)
-            return []
+            return {
+                "training_data": [],
+                "mark_token": self._stable_hash([]),
+                "mark_candidates_count": 0,
+                "tracking_fingerprint": self._stable_hash([]),
+                "snapshot_generated_at": datetime.now(self._tz).isoformat(),
+            }
 
-    def mark_as_trained(self) -> int:
-        """Mark APPROVED/CORRECTED as TRAINED."""
+    def mark_as_trained(self, expected_mark_token: str | None = None) -> dict:
+        """Mark APPROVED/CORRECTED as TRAINED with optional snapshot token guard."""
         if not self._tracking_sheet:
-            return 0
+            return {
+                "marked_count": 0,
+                "token_matched": expected_mark_token is None,
+                "current_mark_token": self._stable_hash([]),
+            }
         try:
             all_data = self._tracking_sheet.get_all_values()
             if len(all_data) <= 1:
-                return 0
+                return {
+                    "marked_count": 0,
+                    "token_matched": expected_mark_token is None,
+                    "current_mark_token": self._stable_hash([]),
+                }
+
             updates = []
+            mark_candidates = []
             for i, row in enumerate(all_data[1:], start=2):
                 if len(row) >= 6 and row[5] in ("APPROVED", "CORRECTED"):
+                    mark_candidates.append(
+                        {
+                            "tech_message_id": row[0],
+                            "symtomps": row[3] if len(row) > 3 else "",
+                            "review_status": row[5],
+                            "timestamp": row[6] if len(row) > 6 else "",
+                        }
+                    )
                     cell = gspread.utils.rowcol_to_a1(i, 6)
                     updates.append({'range': cell, 'values': [['TRAINED']]})
+
+            current_mark_token = self._stable_hash(mark_candidates)
+            token_matched = True
+            if expected_mark_token is not None:
+                token_matched = expected_mark_token == current_mark_token
+            if not token_matched:
+                return {
+                    "marked_count": 0,
+                    "token_matched": False,
+                    "current_mark_token": current_mark_token,
+                }
+
             if updates:
                 for i in range(0, len(updates), 100):
                     self._tracking_sheet.batch_update(updates[i:i+100], value_input_option='RAW')
-            return len(updates)
+            return {
+                "marked_count": len(updates),
+                "token_matched": True,
+                "current_mark_token": current_mark_token,
+            }
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed mark trained: %s", exc)
-            return 0
+            return {
+                "marked_count": 0,
+                "token_matched": expected_mark_token is None,
+                "current_mark_token": None,
+            }
