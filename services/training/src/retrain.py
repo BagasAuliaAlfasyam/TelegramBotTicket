@@ -395,6 +395,12 @@ class RetrainPipeline:
                 )
 
                 # Compare label distribution with previous run (if available)
+                drift_payload = {
+                    "previous_run_id": None,
+                    "current_run_id": active_run_id,
+                    "label_distribution_drift": [],
+                    "note": "No comparable previous run artifact found.",
+                }
                 try:
                     client = mlflow.tracking.MlflowClient()
                     experiment = mlflow.get_experiment_by_name(self._config.mlflow_experiment_name)
@@ -404,46 +410,48 @@ class RetrainPipeline:
                             order_by=["attributes.start_time DESC"],
                             max_results=20,
                         )
-                        prev_run = next((r for r in runs if r.info.run_id != active_run_id), None)
-                        if prev_run is not None:
-                            prev_dist_path = client.download_artifacts(
-                                prev_run.info.run_id,
-                                "analysis/class_distribution.json",
-                            )
-                            with open(prev_dist_path, encoding="utf-8") as pf:
-                                prev_distribution = _json.load(pf)
-
-                            prev_total = max(sum(int(v) for v in prev_distribution.values()), 1)
-                            curr_total = max(sum(int(v) for v in class_distribution.values()), 1)
-                            labels_union = sorted(set(prev_distribution.keys()) | set(class_distribution.keys()))
-                            drift_rows = []
-                            for label_name in labels_union:
-                                prev_count = int(prev_distribution.get(label_name, 0))
-                                curr_count = int(class_distribution.get(label_name, 0))
-                                prev_share = prev_count / prev_total
-                                curr_share = curr_count / curr_total
-                                drift_rows.append(
-                                    {
-                                        "label": label_name,
-                                        "prev_count": prev_count,
-                                        "curr_count": curr_count,
-                                        "prev_share": round(prev_share, 6),
-                                        "curr_share": round(curr_share, 6),
-                                        "share_delta": round(curr_share - prev_share, 6),
-                                    }
+                        previous_runs = [r for r in runs if r.info.run_id != active_run_id]
+                        for prev_run in previous_runs:
+                            try:
+                                prev_dist_path = client.download_artifacts(
+                                    prev_run.info.run_id,
+                                    "analysis/class_distribution.json",
                                 )
+                                with open(prev_dist_path, encoding="utf-8") as pf:
+                                    prev_distribution = _json.load(pf)
 
-                            drift_rows.sort(key=lambda item: abs(item["share_delta"]), reverse=True)
-                            mlflow.log_dict(
-                                {
+                                prev_total = max(sum(int(v) for v in prev_distribution.values()), 1)
+                                curr_total = max(sum(int(v) for v in class_distribution.values()), 1)
+                                labels_union = sorted(set(prev_distribution.keys()) | set(class_distribution.keys()))
+                                drift_rows = []
+                                for label_name in labels_union:
+                                    prev_count = int(prev_distribution.get(label_name, 0))
+                                    curr_count = int(class_distribution.get(label_name, 0))
+                                    prev_share = prev_count / prev_total
+                                    curr_share = curr_count / curr_total
+                                    drift_rows.append(
+                                        {
+                                            "label": label_name,
+                                            "prev_count": prev_count,
+                                            "curr_count": curr_count,
+                                            "prev_share": round(prev_share, 6),
+                                            "curr_share": round(curr_share, 6),
+                                            "share_delta": round(curr_share - prev_share, 6),
+                                        }
+                                    )
+
+                                drift_rows.sort(key=lambda item: abs(item["share_delta"]), reverse=True)
+                                drift_payload = {
                                     "previous_run_id": prev_run.info.run_id,
                                     "current_run_id": active_run_id,
                                     "label_distribution_drift": drift_rows,
-                                },
-                                "analysis/label_distribution_drift_vs_prev_run.json",
-                            )
+                                }
+                                break
+                            except Exception:
+                                continue
                 except Exception as drift_err:
                     _LOGGER.warning("Label distribution drift logging skipped: %s", drift_err)
+                mlflow.log_dict(drift_payload, "analysis/label_distribution_drift_vs_prev_run.json")
 
                 # Log training dataset info (optional — don't fail MLflow if this breaks)
                 try:
