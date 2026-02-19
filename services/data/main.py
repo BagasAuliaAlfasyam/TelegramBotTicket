@@ -32,7 +32,6 @@ from datetime import datetime
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
 from services.data.src.tracking import MLTrackingClient
