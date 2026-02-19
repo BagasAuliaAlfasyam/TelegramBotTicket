@@ -95,6 +95,7 @@ async def status():
         "status": pipeline.status,
         "last_trained": pipeline.last_trained,
         "last_result": pipeline.last_result,
+        "progress": pipeline.progress,
     }
 
 

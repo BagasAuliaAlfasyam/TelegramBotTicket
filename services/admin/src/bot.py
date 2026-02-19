@@ -397,9 +397,9 @@ class AdminCommandHandler:
         """Poll training status and live-edit the progress message."""
         import time as _time
         start = _time.time()
-        last_status = ""
+        last_text = ""
         try:
-            for _ in range(120):  # max 30 min (120 * 15s)
+            for _ in range(240):  # max 60 min (240 * 15s)
                 await asyncio.sleep(15)
                 elapsed = int(_time.time() - start)
                 mm, ss = divmod(elapsed, 60)
@@ -415,7 +415,8 @@ class AdminCommandHandler:
                         f"✅ <b>Training Selesai!</b> ({mm}m {ss}s)\n"
                         f"━━━━━━━━━━━━━━━━━━━━━\n\n"
                         f"🎯 F1 Score: <b>{result.get('f1_score', 'N/A')}</b>\n"
-                        f"📊 Samples: {result.get('n_samples', '?')}\n"
+                        f"📊 Samples: {result.get('n_samples', '?'):,}\n"
+                        f"🏷 Classes: {result.get('n_classes', '?')}\n"
                         f"📦 Version: <code>{result.get('model_version', '?')}</code>\n\n"
                         f"➡️ /reloadmodel untuk load model baru\n"
                         f"➡️ /mlflowpromote untuk promote ke Production",
@@ -435,15 +436,66 @@ class AdminCommandHandler:
                         parse_mode="HTML",
                     )
                     return
-                elif status != last_status:
-                    last_status = status
-                    await msg.edit_text(
-                        f"🔄 <b>Training...</b> ({mm}m {ss}s)\n\n"
-                        f"Status: {status}",
-                        parse_mode="HTML",
-                    )
+
+                # Build live progress display
+                progress = r.get("progress", {})
+                text = self._render_training_progress(progress, mm, ss)
+                if text != last_text:
+                    last_text = text
+                    try:
+                        await msg.edit_text(text, parse_mode="HTML")
+                    except Exception:
+                        pass  # Telegram rate limit or same content
         except Exception as e:
             _LOGGER.exception("Training poll failed: %s", e)
+
+    @staticmethod
+    def _render_training_progress(progress: dict, mm: int, ss: int) -> str:
+        """Render a rich training progress message for Telegram."""
+        phase = progress.get("phase", "running")
+        phase_label = progress.get("phase_label", "⏳ Processing...")
+        n_samples = progress.get("n_samples", 0)
+        n_classes = progress.get("n_classes", 0)
+        n_features = progress.get("n_features", 0)
+        tune = progress.get("tune", False)
+        current_trial = progress.get("current_trial", 0)
+        total_trials = progress.get("total_trials", 0)
+        current_f1 = progress.get("current_f1", 0.0)
+        best_f1 = progress.get("best_f1", 0.0)
+
+        lines = [
+            f"🔄 <b>Training...</b> ({mm}m {ss}s)",
+            "━━━━━━━━━━━━━━━━━━━━━",
+            "",
+        ]
+
+        # Data info (show once available)
+        if n_samples:
+            lines.append(f"📊 Data: <b>{n_samples:,}</b> samples, <b>{n_classes}</b> classes")
+        if n_features:
+            lines.append(f"📐 Features: <b>{n_features:,}</b>")
+
+        if n_samples or n_features:
+            lines.append("")
+
+        # Phase-specific display
+        if phase == "optuna_tuning" and total_trials > 0:
+            # Progress bar
+            bar_len = 20
+            filled = int(bar_len * current_trial / total_trials) if total_trials else 0
+            bar = "▓" * filled + "░" * (bar_len - filled)
+            pct = int(100 * current_trial / total_trials) if total_trials else 0
+
+            lines.append(f"🔬 <b>Optuna Hyperparameter Tuning</b>")
+            lines.append(f"<code>{bar}</code> {current_trial}/{total_trials} ({pct}%)")
+            lines.append("")
+            if current_trial > 0:
+                lines.append(f"📈 Trial {current_trial}: F1 = <b>{current_f1:.4f}</b>")
+                lines.append(f"🏆 Best F1:  <b>{best_f1:.4f}</b>")
+        else:
+            lines.append(phase_label)
+
+        return "\n".join(lines)
 
     # =================== /retrainstatus ===================
     async def retrain_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
