@@ -350,7 +350,6 @@ class RetrainPipeline:
             import mlflow
             import mlflow.lightgbm
             import pandas as pd
-            from mlflow.data.pandas_dataset import PandasDataset
 
             # Set auth credentials (MLflow client reads from env)
             if self._config.mlflow_tracking_username and self._config.mlflow_tracking_password:
@@ -449,12 +448,14 @@ class RetrainPipeline:
                 # Log training dataset info (optional — don't fail MLflow if this breaks)
                 try:
                     df = pd.DataFrame({"text": texts, "label": labels})
-                    dataset: PandasDataset = mlflow.data.from_pandas(
-                        df,
-                        name="ticket-classifier-training",
-                        targets="label",
+                    mlflow.log_dict(
+                        {
+                            "rows": int(len(df)),
+                            "columns": ["text", "label"],
+                            "preview": df.head(20).to_dict(orient="records"),
+                        },
+                        "analysis/training_dataset_preview.json",
                     )
-                    mlflow.log_input(dataset, context="training")
                 except Exception as ds_err:
                     _LOGGER.warning("Dataset logging skipped: %s", ds_err)
 
