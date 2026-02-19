@@ -43,25 +43,10 @@ OPTIMAL_PARAMS = {
     "reg_alpha": 0.1,
     "reg_lambda": 0.1,
     "random_state": 42,
-    "n_jobs": 2,
+    "n_jobs": -1,
     "verbose": -1,
     "force_col_wise": True,  # faster for sparse data
 }
-
-# Label normalization map
-LABEL_MAPPING = {
-    "account management": "Account Management",
-    "application error": "Application Error",
-    "configuration": "Configuration",
-    "connectivity": "Connectivity",
-    "data management": "Data Management",
-    "hardware": "Hardware",
-    "integration": "Integration",
-    "performance": "Performance",
-    "security": "Security",
-    "user access": "User Access",
-}
-
 
 class RetrainPipeline:
     """Fetch data → preprocess → train → log to MLflow."""
@@ -73,6 +58,7 @@ class RetrainPipeline:
         self._status = "idle"
         self._last_trained: str | None = None
         self._last_result: dict = {}
+        self._progress: dict = {}
 
     @property
     def status(self) -> str:
@@ -85,6 +71,17 @@ class RetrainPipeline:
     @property
     def last_result(self) -> dict:
         return self._last_result
+
+    @property
+    def progress(self) -> dict:
+        return dict(self._progress)
+
+    def _set_phase(self, phase: str, label: str, **extra) -> None:
+        """Update current training phase for live progress reporting."""
+        self._progress["phase"] = phase
+        self._progress["phase_label"] = label
+        self._progress.update(extra)
+        _LOGGER.info("Phase: %s — %s", phase, label)
 
     def run(self, force: bool = False, tune: bool = False, tune_trials: int = 50) -> dict:
         self._status = "running"
@@ -102,9 +99,22 @@ class RetrainPipeline:
 
     def _execute(self, force: bool, tune: bool, tune_trials: int) -> dict:
         start = time.time()
+        self._progress = {
+            "phase": "starting",
+            "phase_label": "🚀 Memulai training...",
+            "started_at": datetime.utcnow().isoformat(),
+            "n_samples": 0,
+            "n_classes": 0,
+            "n_features": 0,
+            "current_trial": 0,
+            "total_trials": tune_trials if tune else 0,
+            "best_f1": 0.0,
+            "current_f1": 0.0,
+            "tune": tune,
+        }
 
         # 1. Fetch training data from Data API
-        _LOGGER.info("Fetching training data from Data API...")
+        self._set_phase("fetching_data", "📥 Mengambil data dari Google Sheets...")
         resp = self._http.get(f"{self._config.data_api_url.rstrip('/')}/training/data")
         resp.raise_for_status()
         data = resp.json()
@@ -115,6 +125,7 @@ class RetrainPipeline:
 
         # 2. Combine and prepare training data (deduplicate by tech_message_id)
         #    ML_Tracking has priority (manually curated), Logs fills the rest
+        self._set_phase("preprocessing", "🔧 Preprocessing & deduplikasi data...")
         texts = []
         labels = []
         seen_ids: set[str] = set()
@@ -127,9 +138,8 @@ class RetrainPipeline:
             )
             label = row.get("symtomps", "").strip()
             if text and label:
-                norm = LABEL_MAPPING.get(label.lower(), label)
                 texts.append(text)
-                labels.append(norm)
+                labels.append(label)
                 mid = row.get("tech_message_id", "").strip()
                 if mid:
                     seen_ids.add(mid)
@@ -147,9 +157,8 @@ class RetrainPipeline:
             )
             label = row.get("symtomps", "").strip()
             if text and label:
-                norm = LABEL_MAPPING.get(label.lower(), label)
                 texts.append(text)
-                labels.append(norm)
+                labels.append(label)
                 if mid:
                     seen_ids.add(mid)
 
@@ -159,9 +168,13 @@ class RetrainPipeline:
         if len(texts) < 50 and not force:
             return {"success": False, "message": f"Only {len(texts)} samples, need 50+. Use force=true."}
 
-        _LOGGER.info("Total training data: %d samples, %d classes", len(texts), len(set(labels)))
+        n_classes = len(set(labels))
+        self._progress.update(n_samples=len(texts), n_classes=n_classes)
+        _LOGGER.info("Total training data: %d samples, %d classes", len(texts), n_classes)
 
         # 3. TF-IDF Vectorization (reduced features for Docker performance)
+        self._set_phase("tfidf", "📊 TF-IDF vectorization...",
+                        n_samples=len(texts), n_classes=n_classes)
         tfidf_word = TfidfVectorizer(
             analyzer="word", ngram_range=(1, 2), max_features=5000,
             sublinear_tf=True, min_df=2,
@@ -174,6 +187,7 @@ class RetrainPipeline:
         X_word = tfidf_word.fit_transform(texts)
         X_char = tfidf_char.fit_transform(texts)
         X = hstack([X_word, X_char], format="csc")  # CSC format for LightGBM
+        self._progress["n_features"] = X.shape[1]
         _LOGGER.info("TF-IDF done: %d features (word=%d, char=%d)", X.shape[1], X_word.shape[1], X_char.shape[1])
 
         from sklearn.preprocessing import LabelEncoder
@@ -185,12 +199,33 @@ class RetrainPipeline:
         params["num_class"] = len(le.classes_)
 
         if tune:
+            self._set_phase("optuna_tuning",
+                            f"🔬 Optuna tuning (0/{tune_trials})...",
+                            current_trial=0, total_trials=tune_trials,
+                            best_f1=0.0, current_f1=0.0)
             _LOGGER.info("Running Optuna hyperparameter tuning (%d trials)...", tune_trials)
             try:
                 import optuna
                 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+                def _optuna_callback(study, trial):
+                    """Update progress after each Optuna trial."""
+                    t_num = trial.number + 1
+                    t_val = trial.value if trial.value is not None else 0.0
+                    best = study.best_value if study.best_trial else 0.0
+                    self._progress.update(
+                        current_trial=t_num,
+                        current_f1=round(t_val, 4),
+                        best_f1=round(best, 4),
+                        phase_label=f"🔬 Optuna tuning ({t_num}/{tune_trials})...",
+                    )
+                    if t_num % 10 == 0 or t_num == tune_trials:
+                        _LOGGER.info("Optuna trial %d/%d — F1=%.4f, best=%.4f",
+                                     t_num, tune_trials, t_val, best)
+
                 def objective(trial):
+                    import warnings
+                    warnings.filterwarnings("ignore", category=UserWarning)
                     p = {
                         "objective": "multiclass",
                         "num_class": len(le.classes_),
@@ -212,7 +247,8 @@ class RetrainPipeline:
                     return scores.mean()
 
                 study = optuna.create_study(direction="maximize")
-                study.optimize(objective, n_trials=tune_trials, show_progress_bar=False)
+                study.optimize(objective, n_trials=tune_trials,
+                               show_progress_bar=False, callbacks=[_optuna_callback])
                 params.update(study.best_params)
                 params["num_class"] = len(le.classes_)
                 _LOGGER.info("Best Optuna F1: %.4f", study.best_value)
@@ -220,6 +256,7 @@ class RetrainPipeline:
                 _LOGGER.warning("Optuna not installed, using fixed params")
 
         # 5. Train final model on all data (skip CV for speed — evaluate via training accuracy)
+        self._set_phase("training_final", "🏋️ Training model final...")
         _LOGGER.info("Training LightGBM with %d features, %d classes...", X.shape[1], len(le.classes_))
         model = lgb.LGBMClassifier(**params)
         model.fit(X, y)
@@ -232,6 +269,7 @@ class RetrainPipeline:
         _LOGGER.info("Training F1 (macro): %.4f", f1_macro)
 
         # 7. Log to MLflow
+        self._set_phase("logging_mlflow", "📦 Logging ke MLflow...")
         mlflow_version = None
         try:
             import json as _json
@@ -259,15 +297,17 @@ class RetrainPipeline:
                 mlflow.log_metric("n_samples", len(texts))
                 mlflow.log_metric("n_classes", len(le.classes_))
 
-                # Log training dataset info
-                df = pd.DataFrame({"text": texts, "label": labels})
-                dataset: PandasDataset = mlflow.data.from_pandas(
-                    df,
-                    source="google-sheets://Logs+ML_Tracking",
-                    name="ticket-classifier-training",
-                    targets="label",
-                )
-                mlflow.log_input(dataset, context="training")
+                # Log training dataset info (optional — don't fail MLflow if this breaks)
+                try:
+                    df = pd.DataFrame({"text": texts, "label": labels})
+                    dataset: PandasDataset = mlflow.data.from_pandas(
+                        df,
+                        name="ticket-classifier-training",
+                        targets="label",
+                    )
+                    mlflow.log_input(dataset, context="training")
+                except Exception as ds_err:
+                    _LOGGER.warning("Dataset logging skipped: %s", ds_err)
 
                 # Log LightGBM model via mlflow.lightgbm
                 mlflow.lightgbm.log_model(model, artifact_path="model")
@@ -312,11 +352,13 @@ class RetrainPipeline:
             _LOGGER.warning("MLflow logging failed (training still succeeded): %s", e)
 
         # 8. Mark training data as TRAINED
+        self._set_phase("marking_trained", "✅ Marking data as trained...")
         try:
             self._http.post(f"{self._config.data_api_url.rstrip('/')}/training/mark")
         except Exception:
             _LOGGER.warning("Failed to mark data as trained")
 
+        self._set_phase("done", "✅ Training selesai!")
         elapsed = time.time() - start
         return {
             "success": True,
