@@ -411,7 +411,7 @@ class RetrainPipeline:
                                 prev_run.info.run_id,
                                 "analysis/class_distribution.json",
                             )
-                            with open(prev_dist_path, "r", encoding="utf-8") as pf:
+                            with open(prev_dist_path, encoding="utf-8") as pf:
                                 prev_distribution = _json.load(pf)
 
                             prev_total = max(sum(int(v) for v in prev_distribution.values()), 1)
