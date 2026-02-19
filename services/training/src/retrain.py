@@ -381,6 +381,7 @@ class RetrainPipeline:
         report_dict = classification_report(
             y_val,
             y_val_pred,
+            labels=np.arange(len(le.classes_)),
             target_names=le.classes_.tolist(),
             output_dict=True,
             zero_division=0,
