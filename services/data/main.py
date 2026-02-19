@@ -23,19 +23,19 @@ Endpoints:
 """
 from __future__ import annotations
 
-import logging
-import sys
 import hashlib
 import json
+import logging
+import sys
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
 from services.data.src.tracking import MLTrackingClient
@@ -45,10 +45,10 @@ from services.shared.models import (
     HealthResponse,
     LogRowRequest,
     StatsResponse,
-    TrainingMarkRequest,
-    TrainingMarkResponse,
     TrackingLogRequest,
     TrainingDataResponse,
+    TrainingMarkRequest,
+    TrainingMarkResponse,
     UploadMediaResponse,
 )
 
