@@ -272,9 +272,11 @@ async def mlflow_promote(version: str, stage: str = "Production"):
 # ============ Entry Point ============
 
 if __name__ == "__main__":
+    # Use app object (not string) to prevent double-import that causes
+    # Prometheus 'Duplicated timeseries' ValueError.
     uvicorn.run(
-        "services.prediction.main:app",
+        app,
         host=config.host,
         port=config.port,
-        reload=config.debug,
+        reload=False,  # reload=True requires string ref; disabled to avoid double-import
     )

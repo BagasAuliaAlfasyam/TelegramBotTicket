@@ -339,9 +339,11 @@ async def health():
 
 
 if __name__ == "__main__":
+    # Use app object (not string) to prevent double-import that causes
+    # Prometheus 'Duplicated timeseries' ValueError.
     uvicorn.run(
-        "services.data.main:app",
+        app,
         host=config.host,
         port=config.port,
-        reload=config.debug,
+        reload=False,
     )
