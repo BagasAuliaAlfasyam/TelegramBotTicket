@@ -9,44 +9,46 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
-  - job_name: docker-containers
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
-    relabel_configs:
-      # Use container name as the "container" label
-      - source_labels: [__meta_docker_container_name]
-        regex: "/(.*)"
-        target_label: container
-      # Use Docker compose service name as "service" label
-      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
-        target_label: service
-      # Keep container log stream (stdout/stderr)
-      - source_labels: [__meta_docker_container_log_stream]
-        target_label: logstream
+  # ---------------------------------------------------------------
+  # File-based scraping: read Docker json-file log driver output.
+  # Avoids Docker SD (which has API version compatibility issues).
+  # Log path: /var/lib/docker/containers/<id>/<id>-json.log
+  # Docker wraps each line: {"log":"...","stream":"stdout","time":"..."}
+  # ---------------------------------------------------------------
+  - job_name: docker-file-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: docker
+          __path__: /var/lib/docker/containers/*/*.log
     pipeline_stages:
-      # Try to parse JSON logs (from python-json-logger)
+      # --- Stage 1: parse outer Docker JSON wrapper ---
       - json:
           expressions:
-            ts:      ts
-            level:   level
-            logger:  logger
-            service: service
+            log:      log
+            stream:   stream
+            docker_ts: time
+      # Use the log field as the actual log line
+      - output:
+          source: log
+      # --- Stage 2: parse inner JSON (python-json-logger format) ---
+      - json:
+          expressions:
+            level:    levelname
+            service:  name
+            ts:       asctime
             trace_id: trace_id
-            message: message
-      # Promote level to label for easy filtering
+            message:  message
+      # Promote level & service to labels for filtering
       - labels:
           level:
           service:
-          trace_id:
-      # Use ts from JSON as log timestamp when available
+      # Use inner timestamp when available
       - timestamp:
           source: ts
-          format: RFC3339
+          format: '2006-01-02 15:04:05,000'
           fallback_formats:
-            - "2006-01-02T15:04:05"
-            - "2006-01-02 15:04:05"
+            - '2006-01-02T15:04:05.999999999Z07:00'
+            - RFC3339
           action_on_failure: skip
-      # Fallback: if not JSON, treat entire line as message
-      - output:
-          source: message
