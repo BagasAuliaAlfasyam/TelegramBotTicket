@@ -81,11 +81,11 @@
     {
       "id": 7,
       "title": "Predictions by Label (Top Categories)",
-      "type": "barchart",
+      "type": "bargauge",
       "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
       "datasource": { "uid": "prometheus" },
-      "options": { "orientation": "horizontal", "legend": { "displayMode": "none" }, "tooltip": { "mode": "single" } },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" } } },
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
+      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
       "targets": [{ "expr": "topk(10, sum by (label)(ticket_predictions_total))", "legendFormat": "{{label}}", "refId": "A", "instant": true }]
     },
     {
@@ -99,18 +99,23 @@
         "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 15 }, "color": { "mode": "fixed", "fixedColor": "red" } }
       },
       "targets": [
-        { "expr": "sum by (job, status_code)(rate(http_requests_total{status_code=~\"5..\"}[5m]))", "legendFormat": "{{job}} {{status_code}}", "refId": "A" }
+        { "expr": "sum by (job, status)(rate(http_requests_total{status=~\"5..\"}[5m]))", "legendFormat": "{{job}} {{status}}", "refId": "A" }
       ]
     },
     {
       "id": 9,
       "title": "Confidence Score Distribution",
-      "type": "histogram",
+      "type": "bargauge",
       "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
       "datasource": { "uid": "prometheus" },
-      "options": { "bucketSize": "auto", "fillOpacity": 80, "gradientMode": "none", "legend": { "displayMode": "none" } },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "fixed", "fixedColor": "blue" } } },
-      "targets": [{ "expr": "sum by (le)(rate(ticket_prediction_confidence_bucket[30m]))", "format": "heatmap", "legendFormat": "{{le}}", "refId": "A" }]
+      "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "continuous-GrYlRd" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p50", "refId": "A", "instant": true },
+        { "expr": "histogram_quantile(0.75, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p75", "refId": "B", "instant": true },
+        { "expr": "histogram_quantile(0.90, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p90", "refId": "C", "instant": true },
+        { "expr": "histogram_quantile(0.95, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p95", "refId": "D", "instant": true }
+      ]
     },
     {
       "id": 10,
