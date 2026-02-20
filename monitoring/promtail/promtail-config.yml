@@ -33,11 +33,12 @@ scrape_configs:
       - output:
           source: log
       # --- Stage 2: parse inner JSON (python-json-logger format) ---
+      # Actual fields: ts, level, logger, service, trace_id, message
       - json:
           expressions:
-            level:    levelname
-            service:  name
-            ts:       asctime
+            level:    level
+            service:  service
+            ts:       ts
             trace_id: trace_id
             message:  message
       # Promote level & service to labels for filtering
