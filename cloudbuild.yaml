@@ -179,6 +179,33 @@ steps:
     id: "build-admin-bot"
     waitFor: ["create-repo"]
 
+  # ========== PUSH STAGE: Push images to Artifact Registry ==========
+  # NOTE: Must happen BEFORE deploy so VM can pull the new images.
+  # (The top-level `images:` field only pushes AFTER all steps complete.)
+
+  # -- Push all images to Artifact Registry --
+  - name: "gcr.io/cloud-builders/docker"
+    entrypoint: bash
+    args:
+      - "-c"
+      - |
+        echo "=== Pushing images to Artifact Registry ==="
+        for svc in prediction-api training-api data-api collector-bot admin-bot; do
+          echo "  → pushing $svc:${_IMAGE_TAG}"
+          docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$svc:${_IMAGE_TAG}
+          if [ "${_IMAGE_TAG}" != "latest" ]; then
+            docker push ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/$svc:latest
+          fi
+        done
+        echo "✅ All images pushed"
+    id: "push-all-images"
+    waitFor:
+      - "build-prediction-api"
+      - "build-training-api"
+      - "build-data-api"
+      - "build-collector-bot"
+      - "build-admin-bot"
+
   # ========== DEPLOY STAGE: SSH Deploy to VM ==========
 
   # -- Step 10: Deploy to VM (conditional on _DEPLOY_ENABLED) --
@@ -245,7 +272,7 @@ steps:
             docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
           "
     id: "deploy-to-vm"
-    waitFor: ["build-prediction-api", "build-training-api", "build-data-api", "build-collector-bot", "build-admin-bot"]
+    waitFor: ["push-all-images"]
 
   # -- Step 11: Validate deployment with health checks --
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
