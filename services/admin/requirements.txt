@@ -2,4 +2,5 @@ python-telegram-bot>=20.7
 httpx>=0.25.0
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+python-json-logger>=2.0.7
 tzdata>=2024.1

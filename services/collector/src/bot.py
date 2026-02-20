@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from io import BytesIO
@@ -35,9 +36,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from services.collector.src.parsers import parse_ops_message
 from services.collector.src.sla import compute_sla
-from services.shared.config import CollectorBotConfig, setup_logging
+from services.shared.config import CollectorBotConfig, setup_logging, trace_id_var
 
 _LOGGER = logging.getLogger(__name__)
+
+
+async def _inject_trace_header(request: httpx.Request) -> None:
+    """httpx event hook — injects X-Trace-ID from active ContextVar."""
+    tid = trace_id_var.get("")
+    if tid:
+        request.headers["X-Trace-ID"] = tid
+
 
 _ALLOWED_APPS = {"MIT", "MIS"}
 _SOLVER_NAME_MAP = {"-bg": "Bagas", "-dm": "Damas", "-dvd": "David", "-fr": "Fairuz", "Eri":"-ej"}
@@ -123,7 +132,10 @@ class OpsCollector:
 
     def __init__(self, config: CollectorBotConfig) -> None:
         self._config = config
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http = httpx.AsyncClient(
+            timeout=30.0,
+            event_hooks={"request": [_inject_trace_header]},
+        )
         self._prediction_url = config.prediction_api_url.rstrip("/")
         self._data_url = config.data_api_url.rstrip("/")
 
@@ -146,6 +158,10 @@ class OpsCollector:
         message = update.effective_message
         if not message or not message.text or not message.reply_to_message:
             return
+
+        # Each Telegram handler runs in its own asyncio Task (isolated context),
+        # so setting trace_id_var here is safe and won't bleed into other requests.
+        trace_id_var.set(uuid.uuid4().hex[:8])
 
         sender_id = message.from_user.id if message.from_user else None
         if self._config.admin_user_ids and (

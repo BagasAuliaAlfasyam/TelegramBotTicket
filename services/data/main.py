@@ -26,16 +26,18 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
 from services.data.src.tracking import MLTrackingClient
-from services.shared.config import DataServiceConfig, setup_logging
+from services.shared.config import DataServiceConfig, setup_logging, trace_id_var
 from services.shared.models import (
     FindRowResponse,
     HealthResponse,
@@ -87,6 +89,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Prometheus HTTP metrics (auto-instruments all endpoints → /metrics)
+Instrumentator().instrument(app).expose(app)
+
+
+@app.middleware("http")
+async def _trace_middleware(request: Request, call_next):
+    """Attach X-Trace-ID to every request and propagate trace_id into log records."""
+    trace_id = request.headers.get("X-Trace-ID") or uuid.uuid4().hex[:8]
+    token = trace_id_var.set(trace_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Trace-ID"] = trace_id
+        return response
+    finally:
+        trace_id_var.reset(token)
 
 
 # ============ Logs Endpoints ============

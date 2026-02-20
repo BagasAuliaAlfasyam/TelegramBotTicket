@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -14,6 +16,18 @@ from typing import Optional
 from dotenv import load_dotenv
 
 _LOGGER = logging.getLogger(__name__)
+
+# ============ Trace ID Context ============
+
+trace_id_var: ContextVar[str] = ContextVar("trace_id", default="")
+
+
+class _TraceIdFilter(logging.Filter):
+    """Injects current trace_id from ContextVar into every log record."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.trace_id = trace_id_var.get("-")
+        return True
 
 
 def _load_env():
@@ -259,15 +273,36 @@ class TrainingServiceConfig:
 
 
 def setup_logging(debug: bool = False, service_name: str = "service") -> None:
-    """Setup logging for a microservice."""
+    """Setup structured JSON logging for a microservice.
+
+    Outputs JSON lines (requires python-json-logger) with fields:
+      ts, level, logger, service, trace_id, message
+    Falls back to plain-text if the package is not installed.
+    """
     level = logging.DEBUG if debug else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format=f"%(asctime)s | %(levelname)-8s | {service_name} | %(name)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.WARNING)
-    logging.getLogger("gspread").setLevel(logging.WARNING)
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    handler = logging.StreamHandler()
+    handler.addFilter(_TraceIdFilter())
+
+    try:
+        from pythonjsonlogger import jsonlogger  # python-json-logger 2.x / 3.x
+
+        fmt = jsonlogger.JsonFormatter(
+            "%(asctime)s %(levelname)s %(name)s %(trace_id)s %(message)s",
+            rename_fields={"asctime": "ts", "levelname": "level", "name": "logger"},
+            static_fields={"service": service_name},
+        )
+        handler.setFormatter(fmt)
+    except ImportError:
+        handler.setFormatter(
+            logging.Formatter(
+                f"%(asctime)s | %(levelname)-8s | {service_name} | %(name)s | [%(trace_id)s] | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(level)
+
+    for lib in ("httpx", "httpcore", "telegram", "gspread", "uvicorn.access"):
+        logging.getLogger(lib).setLevel(logging.WARNING)

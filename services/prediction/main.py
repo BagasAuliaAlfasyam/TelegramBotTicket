@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,10 +23,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import Counter, Histogram
+from prometheus_fastapi_instrumentator import Instrumentator
 from services.prediction.src.hybrid import HybridClassifier
-from services.shared.config import PredictionServiceConfig, setup_logging
+from services.shared.config import PredictionServiceConfig, setup_logging, trace_id_var
 from services.shared.models import (
     BatchPredictionRequest,
     BatchPredictionResult,
@@ -46,6 +49,24 @@ setup_logging(config.debug, "prediction-api")
 
 # Global classifier instance
 classifier: HybridClassifier | None = None
+
+# ============ Custom Business Metrics ============
+
+_predictions_counter = Counter(
+    "ticket_predictions_total",
+    "Total ticket predictions",
+    ["status", "source", "label"],
+)
+_confidence_histogram = Histogram(
+    "ticket_prediction_confidence",
+    "ML prediction confidence score (0-1)",
+    buckets=[0.50, 0.60, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.0],
+)
+_gemini_counter = Counter(
+    "ticket_gemini_calls_total",
+    "Total Gemini cascade calls",
+    ["outcome"],  # success | error
+)
 
 
 # ============ Startup/Shutdown ============
@@ -83,6 +104,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Prometheus HTTP metrics (auto-instruments all endpoints → /metrics)
+Instrumentator().instrument(app).expose(app)
+
+
+@app.middleware("http")
+async def _trace_middleware(request: Request, call_next):
+    """Attach X-Trace-ID to every request and propagate trace_id into log records."""
+    trace_id = request.headers.get("X-Trace-ID") or uuid.uuid4().hex[:8]
+    token = trace_id_var.set(trace_id)
+    try:
+        response = await call_next(request)
+        response.headers["X-Trace-ID"] = trace_id
+        return response
+    finally:
+        trace_id_var.reset(token)
+
 
 # ============ Endpoints ============
 
@@ -104,6 +141,18 @@ async def predict(request: PredictionRequest):
         )
 
     result = classifier.predict(request.tech_raw_text, request.solving)
+
+    # Record business metrics
+    label = result.predicted_symtomps or "unknown"
+    _predictions_counter.labels(
+        status=result.prediction_status,
+        source=result.source,
+        label=label,
+    ).inc()
+    _confidence_histogram.observe(result.ml_confidence)
+    if result.source in ("gemini", "hybrid"):
+        _gemini_counter.labels(outcome="success").inc()
+
     return result
 
 
@@ -117,6 +166,15 @@ async def predict_batch(request: BatchPredictionRequest):
     results = []
     for item in request.items:
         result = classifier.predict(item.tech_raw_text, item.solving)
+        label = result.predicted_symtomps or "unknown"
+        _predictions_counter.labels(
+            status=result.prediction_status,
+            source=result.source,
+            label=label,
+        ).inc()
+        _confidence_histogram.observe(result.ml_confidence)
+        if result.source in ("gemini", "hybrid"):
+            _gemini_counter.labels(outcome="success").inc()
         results.append(result)
 
     return BatchPredictionResult(
