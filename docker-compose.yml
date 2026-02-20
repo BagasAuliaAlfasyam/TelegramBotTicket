@@ -288,6 +288,9 @@ services:
   promtail:
     image: grafana/promtail:2.9.7
     container_name: promtail
+    environment:
+      # Force Docker client to use API 1.44 — VM daemon requires min 1.44
+      DOCKER_API_VERSION: "1.44"
     volumes:
       - ./monitoring/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
