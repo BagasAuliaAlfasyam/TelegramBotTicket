@@ -43,8 +43,10 @@ class AdminCommandHandler:
 
     async def _reply(self, update: Update, text: str, parse_mode: str = "HTML") -> None:
         """Reply to the user's command message (quotes the command)."""
+        # Convert surrogate pairs (from JSON-decoded emoji) to proper Unicode codepoints
+        safe_text = text.encode("utf-16", "surrogatepass").decode("utf-16")
         await update.message.reply_text(
-            text,
+            safe_text,
             parse_mode=parse_mode,
             reply_to_message_id=update.message.message_id,
         )
