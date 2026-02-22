@@ -26,7 +26,12 @@ def build_application(config: CollectorBotConfig) -> Application:
 
     app.add_handler(CommandHandler(["health", "ping"], collector.health))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), collector.handle_ops_reply))
-    # EDITED_MESSAGE intentionally NOT handled — edits must not re-trigger full flow + duplicate notifs
+    app.add_handler(
+        MessageHandler(
+            filters.UpdateType.EDITED_MESSAGE & filters.TEXT & (~filters.COMMAND),
+            collector.handle_ops_reply,
+        )
+    )
     return app
 
 

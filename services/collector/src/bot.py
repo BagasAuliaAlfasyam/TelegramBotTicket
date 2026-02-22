@@ -227,7 +227,8 @@ class OpsCollector:
                 media_info, media_url, "", "", "", "", "", "true",
                 sla_min, sla_status, sla_remain, "",
             )
-            notify_text = f"Respon awal (oncek) dicatat untuk grup: {group_label}."
+            action_word = "diperbarui ✏️" if update.edited_message else "dicatat"
+            notify_text = f"Respon awal (oncek) {action_word} untuk grup: {group_label}."
         else:
             solver_key = parsed["initials"].lower()
             solver_name = _SOLVER_NAME_MAP.get(solver_key)
@@ -270,7 +271,8 @@ class OpsCollector:
                 solve_ts, parsed["app"], solver_name,
                 is_oncek, sla_min, sla_status, sla_remain, symtomps_label,
             )
-            notify_text = f"Laporan dicatat oleh {solver_name} untuk grup: {group_label}."
+            action_word = "diperbarui ✏️" if update.edited_message else "dicatat"
+            notify_text = f"Laporan {action_word} oleh {solver_name} untuk grup: {group_label}."
 
             if ml_predicted:
                 pct = ml_confidence * 100
