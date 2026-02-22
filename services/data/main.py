@@ -243,7 +243,8 @@ async def stats_hourly_update(model_version: str = "unknown"):
     if not tracking_client:
         raise HTTPException(503, "Tracking not connected")
     result = tracking_client.calculate_and_update_hourly_stats(model_version)
-    return {"success": bool(result), "stats": result}
+    # result={} means no tickets in that hour (not an error)
+    return {"success": True, "stats": result or {}, "empty": not bool(result)}
 
 
 # ============ Training Data Endpoints ============

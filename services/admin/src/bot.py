@@ -711,28 +711,35 @@ class AdminCommandHandler:
                 timeout=30.0,
             )
             if r.get("success"):
-                st = r.get("stats", {})
-                total = st.get("total_predictions", 0)
-                auto = st.get("auto_count", 0)
-                review = st.get("review_count", 0)
-                reviewed = st.get("reviewed_count", 0)
-                pending = st.get("pending_count", 0)
-                conf = st.get("avg_confidence", 0)
-                auto_rate = (auto / total * 100) if total > 0 else 0
+                if r.get("empty"):
+                    await self._reply(
+                        update,
+                        f"\u2705 <b>Stats OK</b> — Tidak ada tiket pada jam sebelumnya.\n"
+                        f"\U0001f4e6 Model: <code>{model_version}</code>",
+                    )
+                else:
+                    st = r.get("stats", {})
+                    total = st.get("total_predictions", 0)
+                    auto = st.get("auto_count", 0)
+                    review = st.get("review_count", 0)
+                    reviewed = st.get("reviewed_count", 0)
+                    pending = st.get("pending_count", 0)
+                    conf = st.get("avg_confidence", 0)
+                    auto_rate = (auto / total * 100) if total > 0 else 0
 
-                await self._reply(
-                    update,
-                    f"\u2705 <b>Stats Updated!</b>\n"
-                    f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
-                    f"\U0001f4e6 Model: <code>{model_version}</code>\n"
-                    f"\U0001f4ca Total Prediksi: <b>{total:,}</b>\n"
-                    f"\U0001f916 Auto-classified: <b>{auto:,}</b> ({auto_rate:.1f}%)\n"
-                    f"\U0001f4cb Review: <b>{review:,}</b>\n"
-                    f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
-                    f"\u23f3 Pending: <b>{pending:,}</b>\n"
-                    f"\U0001f3af Avg Confidence: <b>{conf:.1f}%</b>\n\n"
-                    f"\U0001f4dd Ditulis ke sheet Monitoring.",
-                )
+                    await self._reply(
+                        update,
+                        f"\u2705 <b>Stats Updated!</b>\n"
+                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+                        f"\U0001f4e6 Model: <code>{model_version}</code>\n"
+                        f"\U0001f4ca Total Prediksi: <b>{total:,}</b>\n"
+                        f"\U0001f916 Auto-classified: <b>{auto:,}</b> ({auto_rate:.1f}%)\n"
+                        f"\U0001f4cb Review: <b>{review:,}</b>\n"
+                        f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
+                        f"\u23f3 Pending: <b>{pending:,}</b>\n"
+                        f"\U0001f3af Avg Confidence: <b>{conf:.1f}%</b>\n\n"
+                        f"\U0001f4dd Ditulis ke sheet Monitoring.",
+                    )
             else:
                 await self._reply(update, f"\u274c Gagal update stats: {r.get('detail', 'unknown')}")
         except Exception as e:
