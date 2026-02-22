@@ -67,14 +67,14 @@ def build_application(config: AdminBotConfig) -> Application:
         ]
         await application.bot.set_my_commands(commands)
 
-        # Start TrendAlertService if admin_chat_id is set
+        # Start TrendAlertService if admin_ids are set
         admin_ids = config.admin_user_ids
         if admin_ids:
             alert_service = TrendAlertService(
                 data_url=config.data_api_url,
                 prediction_url=config.prediction_api_url,
                 bot=application.bot,
-                admin_chat_id=admin_ids[0],  # Alert to first admin
+                admin_chat_ids=admin_ids,  # Alert to all admins
                 interval_seconds=3600,
             )
             await alert_service.start()

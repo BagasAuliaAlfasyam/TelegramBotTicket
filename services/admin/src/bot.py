@@ -1419,13 +1419,13 @@ class TrendAlertService:
         data_url: str,
         prediction_url: str,
         bot,                    # telegram.Bot instance
-        admin_chat_id: int,
+        admin_chat_ids: list[int],
         interval_seconds: int = 3600,  # default: check every hour
     ):
         self._data_url = data_url
         self._prediction_url = prediction_url
         self._bot = bot
-        self._chat_id = admin_chat_id
+        self._chat_ids = admin_chat_ids
         self._interval = interval_seconds
         self._task: asyncio.Task | None = None
         self._client = httpx.AsyncClient(timeout=15.0)
@@ -1449,16 +1449,26 @@ class TrendAlertService:
 
     async def _loop(self) -> None:
         """Main loop that periodically checks and alerts."""
+        from telegram.error import Forbidden
         while True:
             try:
                 await asyncio.sleep(self._interval)
                 alert = await self.check_and_alert()
                 if alert:
-                    await self._bot.send_message(
-                        chat_id=self._chat_id,
-                        text=alert,
-                        parse_mode="HTML",
-                    )
+                    for chat_id in self._chat_ids:
+                        try:
+                            await self._bot.send_message(
+                                chat_id=chat_id,
+                                text=alert,
+                                parse_mode="HTML",
+                            )
+                        except Forbidden:
+                            _LOGGER.warning(
+                                "TrendAlertService: user %s has not started a chat with the bot — skipping.",
+                                chat_id,
+                            )
+                        except Exception as e:
+                            _LOGGER.warning("TrendAlertService: failed to send to %s: %s", chat_id, e)
             except asyncio.CancelledError:
                 break
             except Exception as e:
