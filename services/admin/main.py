@@ -80,7 +80,13 @@ def build_application(config: AdminBotConfig) -> Application:
             await alert_service.start()
             application.bot_data["alert_service"] = alert_service
 
+    async def post_shutdown(application: Application) -> None:
+        alert_service = application.bot_data.get("alert_service")
+        if alert_service:
+            await alert_service.stop()
+
     app.post_init = post_init
+    app.post_shutdown = post_shutdown
     return app
 
 
