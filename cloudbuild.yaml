@@ -231,6 +231,7 @@ steps:
 
             # Pull latest code (for compose files, configs)
             echo '📥 Pulling latest code from GitHub...'
+            git checkout -- . || true
             git pull origin main --ff-only
 
             # Rename SA file if old name still exists (one-time migration)
