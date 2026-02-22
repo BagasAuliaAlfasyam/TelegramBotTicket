@@ -898,7 +898,7 @@ class AdminCommandHandler:
                             return i
                 return -1
 
-            date_col = _col("Ticket Date", "Column 1")
+            date_col = _col("Date", "Ticket Date", "Column 1")
             sla_time_col = _col("SLA Response Time")
             sla_status_col = _col("SLA Status")
             symtomps_col = _col("Symtomps")
@@ -1160,7 +1160,7 @@ class AdminCommandHandler:
                             return i
                 return -1
 
-            date_col = _col("Ticket Date", "Column 1")
+            date_col = _col("Date", "Ticket Date", "Column 1")
             app_col = _col("App")
             symtomps_col = _col("Symtomps")
 
@@ -1308,7 +1308,7 @@ class AdminCommandHandler:
                             return i
                 return -1
 
-            date_col = _col("Ticket Date", "Column 1")
+            date_col = _col("Date", "Ticket Date", "Column 1")
             app_col = _col("App")
             symtomps_col = _col("Symtomps")
             raw_text_col = _col("tech raw text")
