@@ -49,7 +49,7 @@ async def _inject_trace_header(request: httpx.Request) -> None:
 
 
 _ALLOWED_APPS = {"MIT", "MIS"}
-_SOLVER_NAME_MAP = {"-bg": "Bagas", "-dm": "Damas", "-dvd": "David", "-fr": "Fairuz", "Eri":"-ej"}
+_SOLVER_NAME_MAP = {"-bg": "Bagas", "-dm": "Damas", "-dvd": "David", "-fr": "Fairuz", "-ej":"Eri"}
 _DEFAULT_MIME_BY_TYPE = {
     "photo": "image/jpeg", "document": "application/octet-stream",
     "video": "video/mp4", "animation": "video/mp4", "audio": "audio/mpeg",
@@ -299,7 +299,9 @@ class OpsCollector:
                             self._state.set_row_idx(ack_key, new_idx)
 
             # Log ML prediction to tracking (after logs success)
-            if not is_ack and ml_predicted:
+            # Skip on edits — avoid duplicate tracking rows for same ticket
+            is_edit = bool(update.edited_message)
+            if not is_ack and not is_edit and ml_predicted:
                 for attempt in range(3):
                     try:
                         await self._http.post(f"{self._data_url}/tracking/log", json={

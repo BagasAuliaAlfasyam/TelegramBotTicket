@@ -40,11 +40,17 @@ class GoogleSheetsClient:
         return worksheet
 
     def append_log_row(self, row: Sequence, *, return_row_index: bool = False) -> int | None:
-        row_index = None
+        # Parse row index from API response (reliable even under concurrent appends)
+        resp = self._worksheet.append_row(list(row), value_input_option="RAW")
+        row_index: int | None = None
         if return_row_index:
-            row_index = len(self._worksheet.get_all_values()) + 1
-        self._worksheet.append_row(list(row), value_input_option="RAW")
-        _LOGGER.info("Appended log row for tech_message_id=%s", row[3] if len(row) > 3 else "?")
+            try:
+                updated_range = resp.get("updates", {}).get("updatedRange", "")
+                # e.g. "Logs!A5215:T5215" → 5215
+                row_index = int(updated_range.split(":")[-1].lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ"))
+            except Exception:
+                _LOGGER.warning("Could not parse row_index from response: %s", resp)
+        _LOGGER.info("Appended log row for tech_message_id=%s at row %s", row[3] if len(row) > 3 else "?", row_index)
         return row_index
 
     def update_log_row(self, row_index: int, row: Sequence) -> None:
@@ -65,7 +71,9 @@ class GoogleSheetsClient:
 
     def find_row_index_by_tech_message_id(self, tech_message_id: str) -> int | None:
         try:
-            cell = self._worksheet.find(str(tech_message_id))
+            # in_column=4 → column D only (tech_message_id), prevents false matches
+            # in other columns like raw text or media urls
+            cell = self._worksheet.find(str(tech_message_id), in_column=4)
         except (GSpreadException, APIError):
             _LOGGER.exception("Search failed for tech_message_id=%s", tech_message_id)
             return None
