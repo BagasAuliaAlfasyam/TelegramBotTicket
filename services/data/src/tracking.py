@@ -192,20 +192,36 @@ class MLTrackingClient:
                 # Support both new 9-column and legacy 10-column layout
                 ncols = len(row)
                 if ncols >= 9 and row[1]:
-                    day_total = int(row[1]) if row[1] else 0
+                    try:
+                        day_total = int(row[1]) if row[1] else 0
+                    except (ValueError, TypeError):
+                        day_total = 0
                     total += day_total
                     if row[2] and day_total > 0:
-                        conf_sum += float(row[2]) * day_total
-                    auto_c += int(row[3]) if row[3] else 0
+                        try:
+                            # Handle both dot and comma decimal separators (Google Sheets locale)
+                            conf_sum += float(row[2].replace(",", ".")) * day_total
+                        except (ValueError, TypeError):
+                            pass
+                    try:
+                        auto_c += int(row[3]) if row[3] else 0
+                    except (ValueError, TypeError):
+                        pass
                     if ncols == 9:
                         # New 2-tier: [dt, total, conf, auto, review, pending, reviewed, acc, model]
-                        review_c += int(row[4]) if row[4] else 0
-                        reviewed_c += int(row[6]) if row[6] else 0
+                        try:
+                            review_c += int(row[4]) if row[4] else 0
+                            reviewed_c += int(row[6]) if row[6] else 0
+                        except (ValueError, TypeError):
+                            pass
                     else:
                         # Legacy 10-col: [dt, total, conf, auto, high, medium, manual, reviewed, acc, model]
                         # high+medium = review, manual = pending (don't count as review)
-                        review_c += (int(row[4]) if row[4] else 0) + (int(row[5]) if row[5] else 0)
-                        reviewed_c += int(row[7]) if row[7] else 0
+                        try:
+                            review_c += (int(row[4]) if row[4] else 0) + (int(row[5]) if row[5] else 0)
+                            reviewed_c += int(row[7]) if row[7] else 0
+                        except (ValueError, TypeError):
+                            pass
 
             return {
                 "days": days, "total_predictions": total,
@@ -215,6 +231,9 @@ class MLTrackingClient:
             }
         except (GSpreadException, APIError) as exc:
             _LOGGER.exception("Failed to get aggregated stats: %s", exc)
+            return {}
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in _get_aggregated_stats: %s", exc)
             return {}
 
     def calculate_and_update_hourly_stats(self, model_version: str = "unknown") -> dict:
