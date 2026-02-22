@@ -107,8 +107,7 @@ class AdminCommandHandler:
             "├ /stats — Dashboard ML real-time\n"
             "├ /report — Laporan mingguan/bulanan\n"
             "├ /modelstatus — Info model &amp; Gemini\n"
-            "├ /pendingreview — Tiket perlu review\n"
-            "└ /updatestats — Hitung ulang stats harian\n\n"
+            "└ /pendingreview — Tiket perlu review\n\n"
             "🔧 <b>MODEL MANAGEMENT</b>\n"
             "├ /retrain — Training ulang model\n"
             "│  <code>/retrain</code> — default (no tuning)\n"
@@ -689,62 +688,6 @@ class AdminCommandHandler:
         except Exception as e:
             _LOGGER.exception("reloadmodel failed")
             await self._reply(update, f"❌ Gagal reload model.\n<code>{e}</code>")
-
-    # =================== /updatestats ===================
-    async def update_stats(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        """Trigger hourly stats calculation and write to Monitoring sheet."""
-        if not update.effective_user or not self._is_admin(update.effective_user.id):
-            return
-        await self._reply(update, "\U0001f504 Menghitung statistik...")
-        try:
-            # Get current model version
-            model_version = "unknown"
-            try:
-                mi = await self._api_get(f"{self._prediction_url}/model/info")
-                model_version = mi.get("version", "unknown")
-            except Exception:
-                pass
-
-            r = await self._api_post(
-                f"{self._data_url}/stats/hourly",
-                params={"model_version": model_version},
-                timeout=30.0,
-            )
-            if r.get("success"):
-                if r.get("empty"):
-                    await self._reply(
-                        update,
-                        f"\u2705 <b>Stats OK</b> — Tidak ada tiket pada jam sebelumnya.\n"
-                        f"\U0001f4e6 Model: <code>{model_version}</code>",
-                    )
-                else:
-                    st = r.get("stats", {})
-                    total = st.get("total_predictions", 0)
-                    auto = st.get("auto_count", 0)
-                    review = st.get("review_count", 0)
-                    reviewed = st.get("reviewed_count", 0)
-                    pending = st.get("pending_count", 0)
-                    conf = st.get("avg_confidence", 0)
-                    auto_rate = (auto / total * 100) if total > 0 else 0
-
-                    await self._reply(
-                        update,
-                        f"\u2705 <b>Stats Updated!</b>\n"
-                        f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
-                        f"\U0001f4e6 Model: <code>{model_version}</code>\n"
-                        f"\U0001f4ca Total Prediksi: <b>{total:,}</b>\n"
-                        f"\U0001f916 Auto-classified: <b>{auto:,}</b> ({auto_rate:.1f}%)\n"
-                        f"\U0001f4cb Review: <b>{review:,}</b>\n"
-                        f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
-                        f"\u23f3 Pending: <b>{pending:,}</b>\n"
-                        f"\U0001f3af Avg Confidence: <b>{conf:.1f}%</b>\n\n"
-                        f"\U0001f4dd Ditulis ke sheet Monitoring.",
-                    )
-            else:
-                await self._reply(update, f"\u274c Gagal update stats: {r.get('detail', 'unknown')}")
-        except Exception as e:
-            _LOGGER.exception("updatestats failed")
-            await self._reply(update, f"\u274c Gagal update stats.\n<code>{e}</code>")
 
     # =================== /mlflowstatus ===================
     async def mlflow_status(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1428,12 +1371,14 @@ class TrendAlertService:
         bot,                    # telegram.Bot instance
         admin_chat_ids: list[int],
         interval_seconds: int = 3600,  # default: check every hour
+        reporting_chat_id: int = 0,    # TARGET_GROUP_REPORTING untuk laporan hourly otomatis
     ):
         self._data_url = data_url
         self._prediction_url = prediction_url
         self._bot = bot
         self._chat_ids = admin_chat_ids
         self._interval = interval_seconds
+        self._reporting_chat_id = reporting_chat_id
         self._task: asyncio.Task | None = None
         self._client = httpx.AsyncClient(timeout=15.0)
 
@@ -1455,11 +1400,54 @@ class TrendAlertService:
         _LOGGER.info("TrendAlertService stopped")
 
     async def _loop(self) -> None:
-        """Main loop that periodically checks and alerts."""
+        """Main loop: tiap jam hitung stats, kirim laporan ke group, dan cek threshold alerts."""
         from telegram.error import Forbidden
         while True:
             try:
                 await asyncio.sleep(self._interval)
+
+                # 1. Dapatkan model version
+                model_version = "unknown"
+                try:
+                    mi = await self._client.get(f"{self._prediction_url}/model/info")
+                    mi.raise_for_status()
+                    model_version = mi.json().get("version", "unknown")
+                except Exception:
+                    pass
+
+                # 2. Trigger /stats/hourly → hitung & tulis ke sheet Monitoring
+                hourly_result: dict = {}
+                try:
+                    resp = await self._client.post(
+                        f"{self._data_url}/stats/hourly",
+                        params={"model_version": model_version},
+                        timeout=30.0,
+                    )
+                    resp.raise_for_status()
+                    hourly_result = resp.json()
+                except Exception as e:
+                    _LOGGER.warning("TrendAlertService: /stats/hourly failed: %s", e)
+
+                # 3. Kirim laporan hourly ke TARGET_GROUP_REPORTING
+                if self._reporting_chat_id:
+                    now = datetime.now(TZ)
+                    hour_label = now.strftime("%H:%M")
+                    report_msg = self._build_hourly_report(hourly_result, model_version, hour_label)
+                    try:
+                        await self._bot.send_message(
+                            chat_id=self._reporting_chat_id,
+                            text=report_msg,
+                            parse_mode="HTML",
+                        )
+                    except Forbidden:
+                        _LOGGER.warning(
+                            "TrendAlertService: bot not in reporting group %s — skipping.",
+                            self._reporting_chat_id,
+                        )
+                    except Exception as e:
+                        _LOGGER.warning("TrendAlertService: failed to send hourly report: %s", e)
+
+                # 4. Cek threshold alerts → kirim ke admin chat jika ada anomali
                 alert = await self.check_and_alert()
                 if alert:
                     for chat_id in self._chat_ids:
@@ -1481,6 +1469,52 @@ class TrendAlertService:
             except Exception as e:
                 _LOGGER.exception("TrendAlertService error: %s", e)
                 await asyncio.sleep(60)  # Back off on error
+
+    def _build_hourly_report(self, hourly_result: dict, model_version: str, hour_label: str) -> str:
+        """Build the formatted hourly stats message to send to reporting group."""
+        if not hourly_result.get("success") or hourly_result.get("empty"):
+            return (
+                f"\U0001f4ca <b>Laporan ML Hourly \u2014 {hour_label}</b>\n"
+                "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+                "Tidak ada tiket pada jam sebelumnya."
+            )
+
+        st = hourly_result.get("stats", {})
+        total = st.get("total_predictions", 0)
+        auto = st.get("auto_count", 0)
+        review = st.get("review_count", 0)
+        reviewed = st.get("reviewed_count", 0)
+        pending = st.get("pending_count", 0)
+        conf = st.get("avg_confidence", 0.0)
+        auto_rate = (auto / total * 100) if total > 0 else 0
+
+        # Trend insights
+        insights: list[str] = []
+        if total > 0:
+            if auto_rate >= 90:
+                insights.append("\u2705 Excellent automation rate")
+            elif auto_rate < 70:
+                insights.append("\u26a0\ufe0f Low automation — consider retraining")
+            if conf < 80:
+                insights.append("\u26a0\ufe0f Avg confidence dropping")
+            if pending > 50:
+                insights.append(f"\U0001f4cb Pending queue besar ({pending:,})")
+
+        body = (
+            f"\U0001f4ca <b>Laporan ML Hourly \u2014 {hour_label}</b>\n"
+            "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+            f"\U0001f4e6 Model: <code>{model_version}</code>\n"
+            f"\U0001f4c8 Total Prediksi: <b>{total:,}</b>\n"
+            f"\U0001f916 Auto-classified: <b>{auto:,}</b> ({auto_rate:.1f}%)\n"
+            f"\U0001f4cb Review: <b>{review:,}</b>\n"
+            f"\u2705 Reviewed: <b>{reviewed:,}</b>\n"
+            f"\u23f3 Pending: <b>{pending:,}</b>\n"
+            f"\U0001f3af Avg Confidence: <b>{conf:.1f}%</b>"
+        )
+        if insights:
+            body += "\n\n" + "\n".join(insights)
+        body += "\n\n\U0001f4dd Ditulis ke sheet Monitoring."
+        return body
 
     async def check_and_alert(self) -> str | None:
         """

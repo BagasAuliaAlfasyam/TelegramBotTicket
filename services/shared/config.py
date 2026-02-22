@@ -190,6 +190,7 @@ class AdminBotConfig:
     # Telegram
     telegram_reporting_bot_token: str = ""
     admin_user_ids: list[int] = field(default_factory=list)
+    target_group_reporting: int = 0   # TARGET_GROUP_REPORTING chat id for hourly stats
 
     # Service URLs
     prediction_api_url: str = "http://prediction-api:8001"
@@ -214,6 +215,7 @@ class AdminBotConfig:
         return cls(
             telegram_reporting_bot_token=os.getenv("TELEGRAM_BOT_TOKEN_REPORTING", ""),
             admin_user_ids=admin_ids,
+            target_group_reporting=int(os.getenv("TARGET_GROUP_REPORTING", "0") or "0"),
             prediction_api_url=os.getenv("PREDICTION_API_URL", "http://prediction-api:8001"),
             data_api_url=os.getenv("DATA_API_URL", "http://data-api:8002"),
             training_api_url=os.getenv("TRAINING_API_URL", "http://training-api:8005"),
