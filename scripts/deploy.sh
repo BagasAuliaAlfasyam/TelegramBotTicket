@@ -48,6 +48,7 @@ echo "============================================"
 if git rev-parse --is-inside-work-tree &>/dev/null; then
   echo ""
   echo ">>> Pulling latest code..."
+  git checkout -- . || echo "Warning: git checkout failed, continuing"
   git pull origin main --ff-only || echo "Warning: git pull failed, continuing with current code"
 fi
 
