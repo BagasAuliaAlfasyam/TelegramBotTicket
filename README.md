@@ -334,12 +334,16 @@ Bot state (row index cache) is persisted to `/app/state/state_cache.json` on Doc
 
 ### Alert Thresholds
 
+These metrics are evaluated against **final post-cascade outcomes** recorded in `ML_Tracking`. By the time a ticket reaches `REVIEW` status, the full prediction pipeline has already run — LightGBM predicted first, and if confidence was < 75%, Gemini 2.0 Flash also attempted to classify it. `REVIEW` means **both LightGBM and Gemini** failed to reach ≥ 75% confidence. A high review rate therefore signals genuine data drift or distributional shift, not an artifact of the threshold alone.
+
 | Metric | Threshold | Alert |
 |--------|-----------|-------|
-| Automation rate | < 70% | ⚠️ Low auto-classification rate — consider retraining |
-| Review rate | > 30% | 🔴 High manual review queue |
-| Avg confidence | < 80% | ⚠️ Model confidence dropping — monitor closely |
-| Pending queue | > 50 items | 📋 Large unreviewed backlog |
+| Automation rate | < 70% | 🔴 Less than 70% of tickets could be confidently classified — even with Gemini |
+| Review rate | > 30% | 🟠 More than 30% of tickets fell below 75% confidence after the full cascade |
+| Avg confidence | < 80% | ⚠️ Mean confidence dropping — cascade is working harder, consider retraining |
+| Pending queue | > 50 items | 📋 Admin review queue is growing — tickets awaiting manual label |
+
+> The `ML_THRESHOLD_AUTO` (default: `0.75`) and `GEMINI_CASCADE_THRESHOLD` (default: `0.75`) are both set via environment variables. If you raise or lower these, the AUTO/REVIEW split — and therefore these alerts — will change accordingly.
 
 > There is no `/updatestats` command. Hourly stats are written to the Monitoring sheet and broadcast to the reporting group automatically.
 
