@@ -16,7 +16,7 @@
       "datasource": { "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "orientation": "auto" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "blue" }] }, "unit": "short" } },
-      "targets": [{ "expr": "sum(ticket_predictions_total)", "legendFormat": "Total", "refId": "A" }]
+      "targets": [{ "expr": "sum(increase(ticket_predictions_total[$__range]))", "legendFormat": "Total", "refId": "A" }]
     },
     {
       "id": 2,
@@ -26,7 +26,7 @@
       "datasource": { "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "orientation": "auto" },
       "fieldConfig": { "defaults": { "unit": "percent", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "red" }, { "value": 60, "color": "yellow" }, { "value": 80, "color": "green" }] } } },
-      "targets": [{ "expr": "sum(ticket_predictions_total{status=\"AUTO\"}) / sum(ticket_predictions_total) * 100", "legendFormat": "AUTO %", "refId": "A" }]
+      "targets": [{ "expr": "sum(increase(ticket_predictions_total{status=\"AUTO\"}[$__range])) / sum(increase(ticket_predictions_total[$__range])) * 100", "legendFormat": "AUTO %", "refId": "A" }]
     },
     {
       "id": 3,
@@ -86,7 +86,7 @@
       "datasource": { "uid": "prometheus" },
       "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
       "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
-      "targets": [{ "expr": "topk(10, sum by (label)(ticket_predictions_total))", "legendFormat": "{{label}}", "refId": "A", "instant": true }]
+      "targets": [{ "expr": "topk(10, sum by (label)(increase(ticket_predictions_total[$__range])))", "legendFormat": "{{label}}", "refId": "A" }]
     },
     {
       "id": 8,
@@ -111,10 +111,10 @@
       "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
       "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1, "color": { "mode": "continuous-GrYlRd" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
       "targets": [
-        { "expr": "histogram_quantile(0.50, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p50", "refId": "A", "instant": true },
-        { "expr": "histogram_quantile(0.75, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p75", "refId": "B", "instant": true },
-        { "expr": "histogram_quantile(0.90, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p90", "refId": "C", "instant": true },
-        { "expr": "histogram_quantile(0.95, sum by (le)(rate(ticket_prediction_confidence_bucket[1h])))", "legendFormat": "p95", "refId": "D", "instant": true }
+        { "expr": "histogram_quantile(0.50, sum by (le)(rate(ticket_prediction_confidence_bucket[$__rate_interval])))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.75, sum by (le)(rate(ticket_prediction_confidence_bucket[$__rate_interval])))", "legendFormat": "p75", "refId": "B" },
+        { "expr": "histogram_quantile(0.90, sum by (le)(rate(ticket_prediction_confidence_bucket[$__rate_interval])))", "legendFormat": "p90", "refId": "C" },
+        { "expr": "histogram_quantile(0.95, sum by (le)(rate(ticket_prediction_confidence_bucket[$__rate_interval])))", "legendFormat": "p95", "refId": "D" }
       ]
     },
     {
