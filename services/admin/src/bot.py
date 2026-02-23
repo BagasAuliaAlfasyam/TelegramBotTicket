@@ -572,7 +572,7 @@ class AdminCommandHandler:
             if status == "running":
                 phase_label = progress.get("phase_label")
                 if phase_label:
-                    phase_text += f"\n\ud83e\uddea Fase: {html.escape(str(phase_label))}"
+                    phase_text += f"\n\U0001F9EA Fase: {html.escape(str(phase_label))}"
 
                 phase = progress.get("phase")
                 if phase == "optuna_tuning":
@@ -580,7 +580,7 @@ class AdminCommandHandler:
                     total_trials = int(progress.get("total_trials", 0) or 0)
                     if total_trials > 0:
                         pct = int(100 * current_trial / total_trials)
-                        phase_text += f"\n\ud83d\udd2c Optuna: <b>{current_trial}/{total_trials}</b> ({pct}%)"
+                        phase_text += f"\n\U0001F52C Optuna: <b>{current_trial}/{total_trials}</b> ({pct}%)"
 
             msg = (
                 f"\U0001f504 <b>Training Status</b>\n"
@@ -1466,6 +1466,8 @@ class TrendAlertService:
                             _LOGGER.warning("TrendAlertService: failed to send to %s: %s", chat_id, e)
             except asyncio.CancelledError:
                 break
+            except Forbidden:
+                _LOGGER.warning("TrendAlertService: Forbidden on send — check bot chat membership (skipping)")
             except Exception as e:
                 _LOGGER.exception("TrendAlertService error: %s", e)
                 await asyncio.sleep(60)  # Back off on error

@@ -226,7 +226,11 @@ async def stats_weekly():
     """Get weekly aggregated stats."""
     if not tracking_client:
         raise HTTPException(503, "Tracking not connected")
-    return tracking_client.get_weekly_stats()
+    try:
+        return tracking_client.get_weekly_stats() or {}
+    except Exception as e:
+        _LOGGER.error("stats_weekly error: %s", e)
+        return {}
 
 
 @app.get("/stats/monthly")
@@ -234,7 +238,11 @@ async def stats_monthly():
     """Get monthly aggregated stats."""
     if not tracking_client:
         raise HTTPException(503, "Tracking not connected")
-    return tracking_client.get_monthly_stats()
+    try:
+        return tracking_client.get_monthly_stats() or {}
+    except Exception as e:
+        _LOGGER.error("stats_monthly error: %s", e)
+        return {}
 
 
 @app.post("/stats/hourly")
