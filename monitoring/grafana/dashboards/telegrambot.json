@@ -15,7 +15,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
       "datasource": { "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "orientation": "auto" },
-      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "blue" }] }, "unit": "short" } },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "blue" }] }, "unit": "short", "decimals": 0 } },
       "targets": [{ "expr": "sum(increase(ticket_predictions_total[$__range]))", "legendFormat": "Total", "refId": "A" }]
     },
     {
@@ -45,7 +45,7 @@
       "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
       "datasource": { "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 20, "color": "yellow" }, { "value": 50, "color": "red" }] } } },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }, { "value": 20, "color": "yellow" }, { "value": 50, "color": "red" }] } } },
       "targets": [{ "expr": "sum(increase(ticket_gemini_calls_total[1h]))", "legendFormat": "Gemini/hr", "refId": "A" }]
     },
     {
@@ -85,7 +85,7 @@
       "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
       "datasource": { "uid": "prometheus" },
       "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
-      "fieldConfig": { "defaults": { "unit": "short", "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
       "targets": [{ "expr": "topk(10, sum by (label)(increase(ticket_predictions_total[$__range])))", "legendFormat": "{{label}}", "refId": "A" }]
     },
     {
