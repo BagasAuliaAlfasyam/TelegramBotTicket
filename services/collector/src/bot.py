@@ -224,7 +224,7 @@ class OpsCollector:
             sla_min, sla_status, sla_remain = compute_sla(tech_message_dt, ack_dt, self._tz)
             row_data = self._build_row(
                 group_label, now_local, tech_mid, tech_local, tech_raw_text,
-                media_info, media_url, "", "", "", "", "", "true",
+                media_info, media_url, "", "", "", "", "", "", "true",
                 sla_min, sla_status, sla_remain, "",
             )
             action_word = "diperbarui ✏️" if update.edited_message else "dicatat"
