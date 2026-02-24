@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections import OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -31,6 +32,9 @@ class MLTrackingClient:
         self._tracking_sheet = None
         self._monitoring_sheet = None
         self._tz = ZoneInfo(config.timezone)
+        # Bounded in-memory set to deduplicate tracking logs by tech_message_id.
+        # OrderedDict used as an LRU-style cache (max 2000 entries).
+        self._logged_ids: OrderedDict[int, None] = OrderedDict()
         self._connect()
 
     def _connect(self) -> None:
@@ -72,9 +76,18 @@ class MLTrackingClient:
         prediction_status: str,
         source: str = "lightgbm",
     ) -> None:
-        """Log prediction to ML_Tracking sheet."""
+        """Log prediction to ML_Tracking sheet.
+
+        Deduplicates by tech_message_id: if the same ticket was already logged
+        in this process lifetime, the call is silently ignored to prevent
+        duplicate rows when ops sends the same resolve message more than once.
+        """
         if not self._tracking_sheet:
             raise RuntimeError("ML_Tracking sheet not connected")
+
+        if tech_message_id in self._logged_ids:
+            _LOGGER.debug("Skipping duplicate tracking log for tech_message_id=%s", tech_message_id)
+            return
 
         review_status = "auto_approved" if prediction_status == "AUTO" else "pending"
         now = datetime.now(self._tz)
@@ -96,6 +109,11 @@ class MLTrackingClient:
             _LOGGER.warning("Reconnecting to ML_Tracking...")
             self._reconnect()
             self._tracking_sheet.append_row(row, value_input_option='RAW')
+
+        # Mark as logged only after successful write
+        self._logged_ids[tech_message_id] = None
+        if len(self._logged_ids) > 2000:
+            self._logged_ids.popitem(last=False)  # evict oldest
 
     def _reconnect(self):
         client = gspread.service_account(filename=str(self._config.google_service_account_json))
