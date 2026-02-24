@@ -238,6 +238,9 @@ async def tracking_log(request: TrackingLogRequest):
         _predictions_gauge.labels(status=request.prediction_status).inc()
         if request.predicted_symtomps:
             _label_gauge.labels(label=request.predicted_symtomps).inc()
+            _LOGGER.info("Label gauge incremented: label=%s", request.predicted_symtomps)
+        else:
+            _LOGGER.warning("tracking/log received empty predicted_symtomps (status=%s)", request.prediction_status)
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, f"Failed to log: {e}")
