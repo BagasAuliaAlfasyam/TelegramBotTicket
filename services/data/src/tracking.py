@@ -105,11 +105,15 @@ class MLTrackingClient:
 
         try:
             self._tracking_sheet.append_row(row, value_input_option='RAW')
-        except (GSpreadException, APIError):
-            _LOGGER.warning("Reconnecting to ML_Tracking...")
+        except (GSpreadException, APIError) as e:
+            _LOGGER.warning("Reconnecting to ML_Tracking (reason: %s)...", e)
             self._reconnect()
             self._tracking_sheet.append_row(row, value_input_option='RAW')
 
+        _LOGGER.info(
+            "Tracked prediction tech_message_id=%s status=%s confidence=%.2f source=%s",
+            tech_message_id, prediction_status, ml_confidence, source,
+        )
         # Mark as logged only after successful write
         self._logged_ids[tech_message_id] = None
         if len(self._logged_ids) > 2000:
