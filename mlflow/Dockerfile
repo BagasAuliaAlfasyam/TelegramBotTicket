@@ -29,8 +29,8 @@ COPY entrypoint.sh /entrypoint.sh
 RUN htpasswd -cb /etc/nginx/.htpasswd mytechops telkomjuara && \
     chmod 644 /etc/nginx/.htpasswd
 
-# Make entrypoint executable
-RUN chmod +x /entrypoint.sh
+# Fix Windows CRLF line endings and make entrypoint executable
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 # Expose ports:
 #   8080 — nginx reverse proxy with basic auth (external/public access)

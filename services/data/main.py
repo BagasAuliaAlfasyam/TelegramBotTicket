@@ -80,25 +80,48 @@ async def lifespan(application: FastAPI):
     global sheets_client, tracking_client, s3_uploader
     _LOGGER.info("Starting Data API...")
 
-    sheets_client = GoogleSheetsClient(config)
-    tracking_client = MLTrackingClient(config, spreadsheet=sheets_client.spreadsheet)
+    # Google Sheets — graceful startup: app starts even if spreadsheet is unreachable.
+    # Endpoints will return 503 until connection succeeds.
+    # Common causes: spreadsheet not shared with service account, wrong name, no internet.
+    try:
+        sheets_client = GoogleSheetsClient(config)
+        _LOGGER.info("Google Sheets connected: %s", config.google_spreadsheet_name)
+    except Exception as e:
+        _LOGGER.warning(
+            "Google Sheets unavailable at startup (endpoints will return 503): %s. "
+            "Ensure spreadsheet '%s' is shared with the service account in service_account.json.",
+            e,
+            config.google_spreadsheet_name,
+        )
+        sheets_client = None
+
+    try:
+        tracking_client = MLTrackingClient(
+            config, spreadsheet=sheets_client.spreadsheet if sheets_client else None
+        )
+    except Exception as e:
+        _LOGGER.warning("MLTrackingClient init failed: %s", e)
+        tracking_client = None
+
     s3_uploader = S3Uploader(config)
 
     # Restore prediction gauge from ML_Tracking sheet so Grafana stays accurate
     # even after container restarts (unlike ephemeral in-process counters).
     try:
-        counts = tracking_client.get_prediction_counts_by_status()
-        for status, count in counts.items():
-            _predictions_gauge.labels(status=status).set(count)
-        label_counts = tracking_client.get_prediction_counts_by_label()
-        for label, count in label_counts.items():
-            _label_gauge.labels(label=label).set(count)
-        total = sum(counts.values())
-        _LOGGER.info("Restored predictions gauge: total=%s breakdown=%s", total, counts)
+        if tracking_client:
+            counts = tracking_client.get_prediction_counts_by_status()
+            for status, count in counts.items():
+                _predictions_gauge.labels(status=status).set(count)
+            label_counts = tracking_client.get_prediction_counts_by_label()
+            for label, count in label_counts.items():
+                _label_gauge.labels(label=label).set(count)
+            total = sum(counts.values())
+            _LOGGER.info("Restored predictions gauge: total=%s breakdown=%s", total, counts)
     except Exception as e:
         _LOGGER.warning("Could not restore predictions gauge from sheet: %s", e)
 
-    _LOGGER.info("Data API ready — Sheets: %s", config.google_spreadsheet_name)
+    sheets_status = "connected" if sheets_client else "UNAVAILABLE (check service account & spreadsheet sharing)"
+    _LOGGER.info("Data API ready — Sheets: %s [%s]", config.google_spreadsheet_name, sheets_status)
     yield
     _LOGGER.info("Data API shutting down")
 
