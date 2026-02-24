@@ -80,13 +80,13 @@
     },
     {
       "id": 7,
-      "title": "Predictions by Label (All-Time Top 10)",
+      "title": "Predictions by Label (Top Categories)",
       "type": "bargauge",
       "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
       "datasource": { "uid": "prometheus" },
       "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
-      "targets": [{ "expr": "topk(10, ticket_predictions_by_label_total)", "legendFormat": "{{label}}", "refId": "A" }]
+      "targets": [{ "expr": "topk(10, delta(ticket_predictions_by_label_total[$__range]))", "legendFormat": "{{label}}", "refId": "A" }]
     },
     {
       "id": 8,
