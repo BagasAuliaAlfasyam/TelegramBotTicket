@@ -33,6 +33,7 @@ from datetime import datetime
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
@@ -60,6 +61,14 @@ sheets_client: GoogleSheetsClient | None = None
 tracking_client: MLTrackingClient | None = None
 s3_uploader: S3Uploader | None = None
 
+# Persistent prediction gauge — restored from Google Sheets on startup.
+# Unlike Prometheus counters in prediction-api, this survives container restarts.
+_predictions_gauge = Gauge(
+    "ticket_predictions_persisted_total",
+    "Total ML predictions ever logged (restored from ML_Tracking sheet on startup)",
+    ["status"],
+)
+
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
@@ -69,6 +78,17 @@ async def lifespan(application: FastAPI):
     sheets_client = GoogleSheetsClient(config)
     tracking_client = MLTrackingClient(config, spreadsheet=sheets_client.spreadsheet)
     s3_uploader = S3Uploader(config)
+
+    # Restore prediction gauge from ML_Tracking sheet so Grafana stays accurate
+    # even after container restarts (unlike ephemeral in-process counters).
+    try:
+        counts = tracking_client.get_prediction_counts_by_status()
+        for status, count in counts.items():
+            _predictions_gauge.labels(status=status).set(count)
+        total = sum(counts.values())
+        _LOGGER.info("Restored predictions gauge: total=%s breakdown=%s", total, counts)
+    except Exception as e:
+        _LOGGER.warning("Could not restore predictions gauge from sheet: %s", e)
 
     _LOGGER.info("Data API ready — Sheets: %s", config.google_spreadsheet_name)
     yield
@@ -206,6 +226,8 @@ async def tracking_log(request: TrackingLogRequest):
             prediction_status=request.prediction_status,
             source=request.source,
         )
+        # Increment persistent gauge (survives prediction-api restarts)
+        _predictions_gauge.labels(status=request.prediction_status).inc()
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, f"Failed to log: {e}")

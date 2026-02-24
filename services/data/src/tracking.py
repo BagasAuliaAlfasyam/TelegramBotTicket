@@ -124,6 +124,26 @@ class MLTrackingClient:
         self._spreadsheet = client.open(self._config.google_spreadsheet_name)
         self._tracking_sheet = self._spreadsheet.worksheet(ML_TRACKING_SHEET)
 
+    def get_prediction_counts_by_status(self) -> dict[str, int]:
+        """Count rows in ML_Tracking grouped by review_status (auto_approved / pending).
+
+        Returns a dict like {"AUTO": 42, "REVIEW": 5} for Prometheus gauge restoration.
+        """
+        if not self._tracking_sheet:
+            return {}
+        all_rows = self._tracking_sheet.get_all_values()
+        if len(all_rows) <= 1:
+            return {}
+        counts: dict[str, int] = {}
+        for row in all_rows[1:]:
+            # column index 5 = review_status ("auto_approved" or "pending")
+            if len(row) < 6:
+                continue
+            raw = row[5].strip()
+            status = "AUTO" if raw == "auto_approved" else "REVIEW"
+            counts[status] = counts.get(status, 0) + 1
+        return counts
+
     @staticmethod
     def _stable_hash(payload: object) -> str:
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
