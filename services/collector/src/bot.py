@@ -23,6 +23,23 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from telegram import Bot, Message, Update
+
+_RETRYABLE = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout)
+_RETRY_DELAYS = (1.0, 3.0)  # 2 retries: wait 1s then 3s
+
+
+async def _http_retry(fn, *args, **kwargs):
+    """Call an async httpx coroutine with up to 3 attempts on network errors."""
+    last_exc = None
+    for delay in (None, *_RETRY_DELAYS):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            return await fn(*args, **kwargs)
+        except _RETRYABLE as exc:
+            last_exc = exc
+            _LOGGER.warning("HTTP retry due to %s: %s", type(exc).__name__, exc)
+    raise last_exc
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -206,7 +223,7 @@ class OpsCollector:
 
         if not ack_idx:
             try:
-                resp = await self._http.get(f"{self._data_url}/logs/find/{tech_mid}")
+                resp = await _http_retry(self._http.get, f"{self._data_url}/logs/find/{tech_mid}")
                 data = resp.json()
                 if data.get("found"):
                     ack_idx = data["row_index"]
@@ -290,9 +307,9 @@ class OpsCollector:
         try:
             if row_data is not None:
                 if ack_idx:
-                    await self._http.put(f"{self._data_url}/logs/{ack_idx}", json=row_data)
+                    await _http_retry(self._http.put, f"{self._data_url}/logs/{ack_idx}", json=row_data)
                 else:
-                    resp = await self._http.post(f"{self._data_url}/logs/append", json=row_data)
+                    resp = await _http_retry(self._http.post, f"{self._data_url}/logs/append", json=row_data)
                     if resp.status_code == 200:
                         new_idx = resp.json().get("row_index")
                         if new_idx:
@@ -302,23 +319,18 @@ class OpsCollector:
             # Skip on edits — avoid duplicate tracking rows for same ticket
             is_edit = bool(update.edited_message)
             if not is_ack and not is_edit and ml_predicted:
-                for attempt in range(3):
-                    try:
-                        await self._http.post(f"{self._data_url}/tracking/log", json={
-                            "tech_message_id": int(tech_mid),
-                            "tech_raw_text": tech_raw_text,
-                            "solving": parsed["solving"] if parsed else "",
-                            "predicted_symtomps": ml_predicted,
-                            "ml_confidence": ml_confidence,
-                            "prediction_status": ml_status,
-                            "source": ml_source,
-                        })
-                        break
-                    except Exception:
-                        if attempt < 2:
-                            await asyncio.sleep(0.5)
-                        else:
-                            _LOGGER.exception("ML_Tracking failed after 3 attempts")
+                try:
+                    await _http_retry(self._http.post, f"{self._data_url}/tracking/log", json={
+                        "tech_message_id": int(tech_mid),
+                        "tech_raw_text": tech_raw_text,
+                        "solving": parsed["solving"] if parsed else "",
+                        "predicted_symtomps": ml_predicted,
+                        "ml_confidence": ml_confidence,
+                        "prediction_status": ml_status,
+                        "source": ml_source,
+                    })
+                except Exception:
+                    _LOGGER.exception("ML_Tracking failed after retries")
 
         except Exception:
             _LOGGER.exception("Failed to save to Data API")
