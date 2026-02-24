@@ -125,10 +125,7 @@ class MLTrackingClient:
         self._tracking_sheet = self._spreadsheet.worksheet(ML_TRACKING_SHEET)
 
     def get_prediction_counts_by_status(self) -> dict[str, int]:
-        """Count rows in ML_Tracking grouped by review_status (auto_approved / pending).
-
-        Returns a dict like {"AUTO": 42, "REVIEW": 5} for Prometheus gauge restoration.
-        """
+        """Count rows in ML_Tracking grouped by review_status for Prometheus gauge restoration."""
         if not self._tracking_sheet:
             return {}
         all_rows = self._tracking_sheet.get_all_values()
@@ -136,12 +133,28 @@ class MLTrackingClient:
             return {}
         counts: dict[str, int] = {}
         for row in all_rows[1:]:
-            # column index 5 = review_status ("auto_approved" or "pending")
             if len(row) < 6:
                 continue
             raw = row[5].strip()
             status = "AUTO" if raw == "auto_approved" else "REVIEW"
             counts[status] = counts.get(status, 0) + 1
+        return counts
+
+    def get_prediction_counts_by_label(self) -> dict[str, int]:
+        """Count rows in ML_Tracking grouped by predicted_symtomps (column 3) for Prometheus gauge restoration."""
+        if not self._tracking_sheet:
+            return {}
+        all_rows = self._tracking_sheet.get_all_values()
+        if len(all_rows) <= 1:
+            return {}
+        counts: dict[str, int] = {}
+        for row in all_rows[1:]:
+            if len(row) < 4:
+                continue
+            label = row[3].strip()
+            if not label:
+                continue
+            counts[label] = counts.get(label, 0) + 1
         return counts
 
     @staticmethod

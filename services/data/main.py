@@ -68,6 +68,11 @@ _predictions_gauge = Gauge(
     "Total ML predictions ever logged (restored from ML_Tracking sheet on startup)",
     ["status"],
 )
+_label_gauge = Gauge(
+    "ticket_predictions_by_label_total",
+    "Total ML predictions per label (restored from ML_Tracking sheet on startup)",
+    ["label"],
+)
 
 
 @asynccontextmanager
@@ -85,6 +90,9 @@ async def lifespan(application: FastAPI):
         counts = tracking_client.get_prediction_counts_by_status()
         for status, count in counts.items():
             _predictions_gauge.labels(status=status).set(count)
+        label_counts = tracking_client.get_prediction_counts_by_label()
+        for label, count in label_counts.items():
+            _label_gauge.labels(label=label).set(count)
         total = sum(counts.values())
         _LOGGER.info("Restored predictions gauge: total=%s breakdown=%s", total, counts)
     except Exception as e:
@@ -228,6 +236,8 @@ async def tracking_log(request: TrackingLogRequest):
         )
         # Increment persistent gauge (survives prediction-api restarts)
         _predictions_gauge.labels(status=request.prediction_status).inc()
+        if request.predicted_symtomps:
+            _label_gauge.labels(label=request.predicted_symtomps).inc()
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, f"Failed to log: {e}")

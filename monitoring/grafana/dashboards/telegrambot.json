@@ -16,7 +16,7 @@
       "datasource": { "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "orientation": "auto" },
       "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "blue" }] }, "unit": "short", "decimals": 0 } },
-      "targets": [{ "expr": "sum(ticket_predictions_persisted_total)", "legendFormat": "Total", "refId": "A" }]
+      "targets": [{ "expr": "round(sum(delta(ticket_predictions_persisted_total[$__range])))", "legendFormat": "Total", "refId": "A" }]
     },
     {
       "id": 2,
@@ -26,7 +26,7 @@
       "datasource": { "uid": "prometheus" },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "orientation": "auto" },
       "fieldConfig": { "defaults": { "unit": "percent", "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "red" }, { "value": 60, "color": "yellow" }, { "value": 80, "color": "green" }] } } },
-      "targets": [{ "expr": "ticket_predictions_persisted_total{status=\"AUTO\"} / sum(ticket_predictions_persisted_total) * 100", "legendFormat": "AUTO %", "refId": "A" }]
+      "targets": [{ "expr": "round(delta(ticket_predictions_persisted_total{status=\"AUTO\"}[$__range])) / round(sum(delta(ticket_predictions_persisted_total[$__range]))) * 100", "legendFormat": "AUTO %", "refId": "A" }]
     },
     {
       "id": 3,
@@ -86,7 +86,7 @@
       "datasource": { "uid": "prometheus" },
       "options": { "orientation": "horizontal", "reduceOptions": { "calcs": ["lastNotNull"] }, "displayMode": "gradient", "valueMode": "color", "showUnfilled": true },
       "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "color": { "mode": "palette-classic" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] } } },
-      "targets": [{ "expr": "topk(10, sum by (label)(increase(ticket_predictions_total[$__range])))", "legendFormat": "{{label}}", "refId": "A" }]
+      "targets": [{ "expr": "topk(10, round(delta(ticket_predictions_by_label_total[$__range])))", "legendFormat": "{{label}}", "refId": "A" }]
     },
     {
       "id": 8,
