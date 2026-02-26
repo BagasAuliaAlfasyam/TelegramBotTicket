@@ -17,12 +17,12 @@ from services.prediction.src.classifier import LightGBMClassifier
 from services.prediction.src.gemini_classifier import GeminiClassifier
 from services.prediction.src.mlflow_utils import MLflowConfig, MLflowManager
 from services.shared.config import PredictionServiceConfig
-from services.shared.telegram_alerter import TelegramAlerter
 from services.shared.models import (
     PredictionResult,
     PredictionSource,
     PredictionStatus,
 )
+from services.shared.telegram_alerter import TelegramAlerter
 
 _LOGGER = logging.getLogger(__name__)
 
