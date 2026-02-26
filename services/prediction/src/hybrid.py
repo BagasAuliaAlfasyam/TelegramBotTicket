@@ -59,20 +59,11 @@ class HybridClassifier:
         self._mlflow_mgr = MLflowManager(mlflow_config)
         self._lgbm = LightGBMClassifier(self._mlflow_mgr)
 
-        # Initialize Gemini (optional)
-        self._gemini: GeminiClassifier | None = None
-        if config.gemini_enabled and config.gemini_api_key:
-            self._gemini = GeminiClassifier(
-                api_key=config.gemini_api_key,
-                model_name=config.gemini_model_name,
-                timeout=config.gemini_timeout,
-                alerter=self._alerter,
-            )
-
         # Threshold (2-tier)
         self._threshold_auto = config.threshold_auto
 
         # Telegram Alerter (opsional — kirim notif error ke admin)
+        # HARUS diinit sebelum Gemini karena di-pass sebagai dependency
         self._alerter: TelegramAlerter | None = None
         if config.telegram_bot_token_reporting and config.telegram_admin_user_ids:
             self._alerter = TelegramAlerter(
@@ -83,6 +74,16 @@ class HybridClassifier:
             _LOGGER.info(
                 "Telegram alerter enabled: %d admin(s) will receive error notifications",
                 len(config.telegram_admin_user_ids),
+            )
+
+        # Initialize Gemini (optional)
+        self._gemini: GeminiClassifier | None = None
+        if config.gemini_enabled and config.gemini_api_key:
+            self._gemini = GeminiClassifier(
+                api_key=config.gemini_api_key,
+                model_name=config.gemini_model_name,
+                timeout=config.gemini_timeout,
+                alerter=self._alerter,
             )
 
     def load_model(self, stage: str = "Production") -> bool:
