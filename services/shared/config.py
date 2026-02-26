@@ -69,6 +69,11 @@ class PredictionServiceConfig:
     # ML Threshold (2-tier: AUTO >= 0.75, REVIEW < 0.75)
     threshold_auto: float = 0.75
 
+    # Telegram Alerter (kirim notif error ke reporting bot)
+    telegram_bot_token_reporting: str = ""
+    telegram_admin_user_ids: list[int] = field(default_factory=list)
+    alert_cooldown_seconds: int = 1800  # 30 menit
+
     # Service
     host: str = "0.0.0.0"
     port: int = 8001
@@ -92,6 +97,13 @@ class PredictionServiceConfig:
             gemini_cascade_threshold=float(os.getenv("GEMINI_CASCADE_THRESHOLD", "0.75")),
             gemini_timeout=float(os.getenv("GEMINI_TIMEOUT", "10.0")),
             threshold_auto=float(os.getenv("ML_THRESHOLD_AUTO", "0.75")),
+            telegram_bot_token_reporting=os.getenv("TELEGRAM_BOT_TOKEN_REPORTING", ""),
+            telegram_admin_user_ids=[
+                int(x.strip())
+                for x in (os.getenv("ADMIN_USER_IDS", "") or "").split(",")
+                if x.strip().lstrip("-").isdigit()
+            ],
+            alert_cooldown_seconds=int(os.getenv("ALERT_COOLDOWN_SECONDS", "1800")),
             host=os.getenv("SERVICE_HOST", "0.0.0.0"),
             port=int(os.getenv("SERVICE_PORT", "8001")),
             debug=os.getenv("DEBUG", "false").lower() in ("true", "1"),

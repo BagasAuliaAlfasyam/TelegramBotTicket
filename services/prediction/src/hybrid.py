@@ -17,6 +17,7 @@ from services.prediction.src.classifier import LightGBMClassifier
 from services.prediction.src.gemini_classifier import GeminiClassifier
 from services.prediction.src.mlflow_utils import MLflowConfig, MLflowManager
 from services.shared.config import PredictionServiceConfig
+from services.shared.telegram_alerter import TelegramAlerter
 from services.shared.models import (
     PredictionResult,
     PredictionSource,
@@ -65,10 +66,24 @@ class HybridClassifier:
                 api_key=config.gemini_api_key,
                 model_name=config.gemini_model_name,
                 timeout=config.gemini_timeout,
+                alerter=self._alerter,
             )
 
         # Threshold (2-tier)
         self._threshold_auto = config.threshold_auto
+
+        # Telegram Alerter (opsional — kirim notif error ke admin)
+        self._alerter: TelegramAlerter | None = None
+        if config.telegram_bot_token_reporting and config.telegram_admin_user_ids:
+            self._alerter = TelegramAlerter(
+                bot_token=config.telegram_bot_token_reporting,
+                chat_ids=config.telegram_admin_user_ids,
+                cooldown_seconds=config.alert_cooldown_seconds,
+            )
+            _LOGGER.info(
+                "Telegram alerter enabled: %d admin(s) will receive error notifications",
+                len(config.telegram_admin_user_ids),
+            )
 
     def load_model(self, stage: str = "Production") -> bool:
         """Load LightGBM model and sync labels to Gemini."""
