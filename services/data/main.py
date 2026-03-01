@@ -30,7 +30,7 @@ import json
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
+
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
 from services.data.src.tracking import MLTrackingClient
@@ -48,7 +49,6 @@ from services.shared.models import (
     FindRowResponse,
     HealthResponse,
     LogRowRequest,
-    StatsResponse,
     TrackingLogRequest,
     TrainingDataResponse,
     TrainingMarkRequest,

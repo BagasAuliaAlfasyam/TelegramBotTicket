@@ -317,7 +317,6 @@ class OpsCollector:
         notification_chat_id = self._config.telegram_admin_chat_id or message.chat.id
         can_reply = notification_chat_id == message.chat.id
 
-        data_saved = False   # True jika langsung sukses ke Sheets
         data_queued = False  # True jika masuk DLQ (202)
         queue_size = 0
 
@@ -325,14 +324,12 @@ class OpsCollector:
             if row_data is not None:
                 if ack_idx:
                     await _http_retry(self._http.put, f"{self._data_url}/logs/{ack_idx}", json=row_data)
-                    data_saved = True
                 else:
                     resp = await _http_retry(self._http.post, f"{self._data_url}/logs/append", json=row_data)
                     if resp.status_code == 200:
                         new_idx = resp.json().get("row_index")
                         if new_idx:
                             self._state.set_row_idx(ack_key, new_idx)
-                        data_saved = True
                     elif resp.status_code == 202:
                         # Data masuk DLQ di data-api — tidak hilang, akan di-replay
                         data_queued = True
