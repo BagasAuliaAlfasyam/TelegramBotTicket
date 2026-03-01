@@ -127,6 +127,13 @@ class DataServiceConfig:
     s3_public_url: str = ""
     s3_media_prefix: str = "tech-media"
 
+    # Telegram Alerter (untuk notif DLQ ke reporting bot)
+    telegram_bot_token_reporting: str = ""
+    telegram_admin_chat_id: int = 0
+
+    # DLQ (Dead Letter Queue)
+    dlq_path: Path = field(default_factory=lambda: Path("/app/data/dlq.json"))
+
     # Service
     host: str = "0.0.0.0"
     port: int = 8002
@@ -147,6 +154,9 @@ class DataServiceConfig:
             s3_endpoint_url=os.getenv("AWS_S3_ENDPOINT", ""),
             s3_public_url=os.getenv("AWS_S3_PUBLIC_BASE_URL", ""),
             s3_media_prefix=os.getenv("S3_MEDIA_PREFIX") or os.getenv("AWS_S3_MEDIA_PREFIX", "tech-media"),
+            telegram_bot_token_reporting=os.getenv("TELEGRAM_BOT_TOKEN_REPORTING", ""),
+            telegram_admin_chat_id=int(os.getenv("TELEGRAM_ADMIN_CHAT_ID", "") or os.getenv("TARGET_GROUP_REPORTING", "0") or "0"),
+            dlq_path=Path(os.getenv("DLQ_PATH", "/app/data/dlq.json")),
             host=os.getenv("SERVICE_HOST", "0.0.0.0"),
             port=int(os.getenv("SERVICE_PORT", "8002")),
             timezone=os.getenv("TIMEZONE", "Asia/Jakarta"),

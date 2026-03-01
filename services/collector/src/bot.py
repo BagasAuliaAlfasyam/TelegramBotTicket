@@ -29,13 +29,26 @@ _RETRY_DELAYS = (1.0, 3.0)  # 2 retries: wait 1s then 3s
 
 
 async def _http_retry(fn, *args, **kwargs):
-    """Call an async httpx coroutine with up to 3 attempts on network errors."""
+    """
+    Call an async httpx coroutine dengan up to 3 attempts.
+    Retry untuk: network error (ConnectError, Timeout) DAN HTTP 5xx dari server.
+    """
     last_exc = None
     for delay in (None, *_RETRY_DELAYS):
         if delay:
             await asyncio.sleep(delay)
         try:
-            return await fn(*args, **kwargs)
+            resp = await fn(*args, **kwargs)
+            # Retry juga saat data-api return 5xx (bukan cuma network timeout)
+            if resp.status_code >= 500:
+                last_exc = httpx.HTTPStatusError(
+                    f"Server error {resp.status_code}",
+                    request=resp.request,
+                    response=resp,
+                )
+                _LOGGER.warning("HTTP retry due to status %d", resp.status_code)
+                continue
+            return resp
         except _RETRYABLE as exc:
             last_exc = exc
             _LOGGER.warning("HTTP retry due to %s: %s", type(exc).__name__, exc)
@@ -304,16 +317,30 @@ class OpsCollector:
         notification_chat_id = self._config.telegram_admin_chat_id or message.chat.id
         can_reply = notification_chat_id == message.chat.id
 
+        data_saved = False   # True jika langsung sukses ke Sheets
+        data_queued = False  # True jika masuk DLQ (202)
+        queue_size = 0
+
         try:
             if row_data is not None:
                 if ack_idx:
                     await _http_retry(self._http.put, f"{self._data_url}/logs/{ack_idx}", json=row_data)
+                    data_saved = True
                 else:
                     resp = await _http_retry(self._http.post, f"{self._data_url}/logs/append", json=row_data)
                     if resp.status_code == 200:
                         new_idx = resp.json().get("row_index")
                         if new_idx:
                             self._state.set_row_idx(ack_key, new_idx)
+                        data_saved = True
+                    elif resp.status_code == 202:
+                        # Data masuk DLQ di data-api — tidak hilang, akan di-replay
+                        data_queued = True
+                        queue_size = resp.json().get("queue_size", 0)
+                        _LOGGER.warning(
+                            "Data queued in DLQ (Sheets unavailable), queue_size=%d",
+                            queue_size,
+                        )
 
             # Log ML prediction to tracking (after logs success)
             # Skip on edits — avoid duplicate tracking rows for same ticket
@@ -334,7 +361,25 @@ class OpsCollector:
 
         except Exception:
             _LOGGER.exception("Failed to save to Data API")
-            await self._safe_notify(notification_chat_id, "❌ Gagal menyimpan ke Data API.", message.message_id if can_reply else None)
+            await self._safe_notify(
+                notification_chat_id,
+                "❌ Gagal menyimpan ke Data API setelah beberapa percobaan. Mohon cek log server.",
+                message.message_id if can_reply else None,
+            )
+            return
+
+        # Jika data masuk antrian DLQ, notif khusus dan stop (jangan kirim notif sukses)
+        if data_queued:
+            await self._safe_notify(
+                notification_chat_id,
+                (
+                    f"⚠️ <b>Data dimasukkan ke antrian</b>\n\n"
+                    f"Google Sheets sedang tidak tersedia. Data tiket telah diamankan "
+                    f"dan akan otomatis disimpan saat koneksi pulih.\n"
+                    f"📥 Antrian saat ini: <b>{queue_size} tiket</b>"
+                ),
+                message.message_id if can_reply else None,
+            )
             return
 
         if media_upload_failed:
