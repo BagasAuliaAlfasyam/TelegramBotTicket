@@ -40,7 +40,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from prometheus_client import Gauge
 from prometheus_fastapi_instrumentator import Instrumentator
-
 from services.data.src.sheets import GoogleSheetsClient
 from services.data.src.storage import S3Uploader
 from services.data.src.tracking import MLTrackingClient
