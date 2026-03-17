@@ -25,7 +25,7 @@ def _paused_minutes_between(start_utc, end_utc, tz):
     end_local = end_utc.astimezone(tz)
     if end_local <= start_local:
         return 0.0
-    breaks = [(12, 13), (19, 20)]
+    breaks = [(0, 6), (13, 14), (19, 20)]
     total_seconds = 0.0
     current_date = start_local.date()
     end_date = end_local.date()
